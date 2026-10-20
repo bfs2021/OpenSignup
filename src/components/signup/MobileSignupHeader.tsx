@@ -46,7 +46,7 @@ export function MobileSignupHeader({
           </button>
         </div>
 
-        <PublicLinkChip url={publicUrl} />
+        <PublicLinkChip url={publicUrl} signupId={signupId} />
       </header>
 
       <MobileMoreMenuSheet

@@ -1,8 +1,9 @@
+import { headers } from 'next/headers';
 import { after } from 'next/server';
 import { getDb } from '@/db/client';
 import { requireOrganizerSession, toActor } from '@/auth/session';
 import { getSignupForOrganizer } from '@/services/signups';
-import { recordOrganizerView } from '@/lib/view-tracker';
+import { readRequestSignals, recordOrganizerView } from '@/lib/view-tracker';
 import { SignupLoadError } from '@/components/signup/SignupLoadError';
 import SignupView, { toSignupViewProps } from '@/app/s/[slug]/signup-view';
 
@@ -22,12 +23,14 @@ export default async function SignupPreviewPage({ params }: PageParams) {
   }
   const sig = result.value;
 
+  const signals = readRequestSignals(await headers());
   after(() =>
     recordOrganizerView({
       actor: { actorId: session.organizerId, actorType: 'organizer' },
       signupId: sig.id,
       workspaceId: sig.workspaceId,
       eventType: 'signup.previewed',
+      signals,
     }),
   );
 

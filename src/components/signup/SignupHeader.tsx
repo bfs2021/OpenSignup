@@ -48,7 +48,7 @@ export function SignupHeader({
             <h1 className="truncate text-2xl font-semibold tracking-tight">{title}</h1>
             <StatusPill status={status} />
           </div>
-          <PublicLinkChip url={publicUrl} className="inline-flex max-w-md" />
+          <PublicLinkChip url={publicUrl} signupId={signupId} className="inline-flex max-w-md" />
         </div>
         <div className={`grid w-full max-w-full shrink-0 ${gridColsClass} gap-x-2 gap-y-3 sm:w-auto sm:max-w-sm`}>
           <Link

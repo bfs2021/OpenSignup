@@ -3,7 +3,7 @@ import type { Db } from '@/db/client';
 import { signups } from '@/db/schema/signups';
 import { slotFields } from '@/db/schema/slot-fields';
 import { slots } from '@/db/schema/slots';
-import { activityActor, recordActivity } from '@/lib/activity';
+import { activityActor, recordActivity, recordActivityBestEffort } from '@/lib/activity';
 import { serviceError, ServiceException, type ServiceError } from '@/lib/errors';
 import { makeId } from '@/lib/ids';
 import { parseInputSafe } from '@/lib/parse';
@@ -351,6 +351,34 @@ export async function publishSignup(
   return transitionStatus(db, actor, signupId, 'draft', 'open', 'signup.published');
 }
 
+/**
+ * Telemetry for a publish the service turned down: no slots yet, or the
+ * signup was no longer a draft (another tab, or a second click). Written
+ * after the transaction, best effort, since it describes no change. A
+ * viewer's refusal is thrown by the policy guard before this point and is
+ * not recorded.
+ */
+async function recordPublishRefused(
+  db: Db,
+  actor: Actor,
+  signupId: string,
+  workspaceId: string | null,
+  error: ServiceError,
+): Promise<void> {
+  if (error.code !== 'conflict') return;
+  const payload =
+    error.field === 'status'
+      ? { code: error.code, reason: 'not_draft', status: error.received }
+      : { code: error.code, reason: 'no_slots' };
+  await recordActivityBestEffort(db, {
+    signupId,
+    workspaceId,
+    actor: activityActor(actor),
+    eventType: 'signup.publish_refused',
+    payload,
+  });
+}
+
 export async function closeSignup(
   db: Db,
   actor: Actor,
@@ -421,7 +449,7 @@ async function transitionStatus(
   if (!found) return err(serviceError('not_found', 'signup not found'));
   requireWorkspaceWrite(actor, found.workspaceId);
 
-  return db.transaction(async (tx) => {
+  const result = await db.transaction(async (tx) => {
     // The status check, the slot count and the write all happen under the
     // signup lock. Checked on an unlocked read, two transitions that overlapped
     // both passed and both wrote: an archive racing a publish left the signup
@@ -477,6 +505,10 @@ async function transitionStatus(
     });
     return ok(next);
   });
+  if (!result.ok && to === 'open') {
+    await recordPublishRefused(db, actor, signupId, found.workspaceId, result.error);
+  }
+  return result;
 }
 
 export async function listSignupsForWorkspace(

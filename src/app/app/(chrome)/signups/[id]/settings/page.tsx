@@ -1,10 +1,11 @@
+import { headers } from 'next/headers';
 import { after } from 'next/server';
 import { requireOrganizerSession, toActor } from '@/auth/session';
 import { AsyncSubmitButton } from '@/components/ui/async-submit-button';
 import { SavedNotice } from '@/components/ui/save-notice';
 import { requiresEmail } from '@/schemas/signups';
 import { loadSignupForOrganizer } from '@/services/signups.cached';
-import { recordOrganizerView } from '@/lib/view-tracker';
+import { readRequestSignals, recordOrganizerView } from '@/lib/view-tracker';
 import { FormError } from '@/components/ui/form-error';
 import { setRequireEmailAction } from '../actions';
 import { DeleteSignupForm } from './delete-signup-form';
@@ -22,12 +23,14 @@ export default async function SettingsTab({ params, searchParams }: PageParams) 
   if (!result.ok) return null;
   const sig = result.value;
   const requireEmail = requiresEmail(sig.settings);
+  const signals = readRequestSignals(await headers());
   after(() =>
     recordOrganizerView({
       actor: { actorId: session.organizerId, actorType: 'organizer' },
       signupId: sig.id,
       workspaceId: sig.workspaceId,
       eventType: 'signup.editor_opened',
+      signals,
       payload: { section: 'settings' },
     }),
   );

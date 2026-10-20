@@ -24,6 +24,23 @@ export function refererHost(ref: string | null | undefined): string | null {
   }
 }
 
+export type DeviceClass = 'phone' | 'computer' | 'unknown';
+
+/**
+ * Whether a request came from a phone or a computer, for organizer page views
+ * (a draft abandoned on a phone reads differently from one abandoned at a
+ * desk). Chromium says so in the `Sec-CH-UA-Mobile` hint; for the rest, a
+ * phone's User-Agent carries "Mobi" (iPhone, Android phones), which tablets
+ * and desktops leave out. `uaClass` can't tell the two apart: it only sorts
+ * browsers from bots.
+ */
+export function classifyDevice(signals: Pick<RequestSignals, 'userAgent' | 'mobileHint'>): DeviceClass {
+  if (signals.mobileHint === '?1') return 'phone';
+  if (signals.mobileHint === '?0') return 'computer';
+  if (!signals.userAgent) return 'unknown';
+  return /Mobi/i.test(signals.userAgent) ? 'phone' : 'computer';
+}
+
 export function isDoNotTrack(headerMap: {
   get: (name: string) => string | null;
 }): boolean {
@@ -41,15 +58,20 @@ export interface RequestSignals {
   userAgent: string | null;
   referer: string | null;
   dnt: boolean;
+  /** The `Sec-CH-UA-Mobile` client hint, `?1` on a phone and `?0` elsewhere,
+   *  when the browser sends it (Chromium does). */
+  mobileHint?: string;
 }
 
 export function readRequestSignals(headerMap: {
   get: (name: string) => string | null;
 }): RequestSignals {
+  const mobileHint = headerMap.get('sec-ch-ua-mobile');
   return {
     userAgent: headerMap.get('user-agent'),
     referer: headerMap.get('referer'),
     dnt: isDoNotTrack(headerMap),
+    ...(mobileHint ? { mobileHint } : {}),
   };
 }
 
@@ -133,12 +155,22 @@ export async function recordEditLinkFollowed(args: {
   }));
 }
 
+/**
+ * An organizer opening one of their own pages. Signed in, so neither
+ * do-not-track nor the bot filter applies; the row says whether the page was
+ * opened on a phone or a computer (`device`), never the User-Agent itself.
+ */
 export async function recordOrganizerView(args: {
   actor: ActivityActor;
   signupId: string | null;
   workspaceId: string | null;
   eventType: ActivityEvent;
   payload?: Record<string, unknown>;
+  signals: RequestSignals;
 }): Promise<void> {
-  await recordActivityBestEffort(getDb(), args);
+  const { signals, payload, ...row } = args;
+  await recordActivityBestEffort(getDb(), {
+    ...row,
+    payload: { ...payload, device: classifyDevice(signals) },
+  });
 }

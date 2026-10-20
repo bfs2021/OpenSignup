@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import { getDb, type Db } from '@/db/client';
 import { activity } from '@/db/schema/activity';
 import { workspaceMembers } from '@/db/schema/members';
@@ -679,6 +679,14 @@ describe('signups service (db)', () => {
       if (!r.ok) throw new Error(`slot setup failed: ${r.error.message}`);
     }
 
+    async function refusedPublishes(signupId: string) {
+      const rows = await fx.db
+        .select({ payload: activity.payload })
+        .from(activity)
+        .where(and(eq(activity.signupId, signupId), eq(activity.eventType, 'signup.publish_refused')));
+      return rows.map((r) => r.payload);
+    }
+
     it('publishSignup moves draft → open and stamps opensAt', async () => {
       const created = await createSignup(fx.db, fx.actor, fx.workspaceId, validCreateInput('Pub'));
       if (!created.ok) throw new Error('setup failed');
@@ -706,6 +714,9 @@ describe('signups service (db)', () => {
       if (r.ok) return;
       expect(r.error.code).toBe('conflict');
       expect(r.error.message).toMatch(/at least one slot/);
+      expect(await refusedPublishes(created.value.id)).toEqual([
+        { code: 'conflict', reason: 'no_slots' },
+      ]);
     });
 
     it('publishSignup rejects when not in draft', async () => {
@@ -721,6 +732,18 @@ describe('signups service (db)', () => {
       expect(r.error.code).toBe('conflict');
       expect(r.error.received).toBe('open');
       expect(r.error.expected).toBe('draft');
+      expect(await refusedPublishes(created.value.id)).toEqual([
+        { code: 'conflict', reason: 'not_draft', status: 'open' },
+      ]);
+    });
+
+    it('records no refused publish for a publish that worked, or a refused close', async () => {
+      const created = await createSignup(fx.db, fx.actor, fx.workspaceId, validCreateInput('Fine'));
+      if (!created.ok) throw new Error('setup failed');
+      await withSlot(created.value.id);
+      expect((await closeSignup(fx.db, fx.actor, created.value.id)).ok).toBe(false);
+      expect((await publishSignup(fx.db, fx.actor, created.value.id)).ok).toBe(true);
+      expect(await refusedPublishes(created.value.id)).toEqual([]);
     });
 
     it('closeSignup moves open → closed', async () => {

@@ -23,7 +23,7 @@ export default function PrivacyPage() {
     <>
       <header className="space-y-2">
         <h1 className="text-3xl font-semibold tracking-tight">Privacy policy</h1>
-        <p className="text-sm text-ink-muted">Last updated: 4 October 2026</p>
+        <p className="text-sm text-ink-muted">Last updated: 20 October 2026</p>
       </header>
 
       <section className="space-y-3">
@@ -56,8 +56,10 @@ export default function PrivacyPage() {
           <li>The signups, slots, and settings you create.</li>
           <li>
             An append-only activity log of organizer actions (sign-ins, creating and editing
-            signups, sending magic links), participant commitments on your signups, and reminder
-            dispatches. This exists so an organizer can audit what happened in their own workspace
+            signups, sending magic links, copying a signup&rsquo;s link, a publish or an AI draft
+            that didn&rsquo;t go through), which of your own pages you open and whether on a phone
+            or a computer (never the browser&rsquo;s full identifying string), participant
+            commitments on your signups, and reminder dispatches. This exists so an organizer can audit what happened in their own workspace
             and so the operator can investigate abuse. The same log records anonymous view telemetry
             on the marketing home page and on your public signup pages (see &ldquo;Logs and
             rate-limiting&rdquo; below).
