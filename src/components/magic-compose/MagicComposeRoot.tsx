@@ -48,7 +48,7 @@ export function MagicComposeRoot() {
   useEffect(() => {
     if (phase.kind !== 'drafting') return;
     if (phase.animationDone && phase.response) {
-      router.push(`/app/signups/${phase.response.id}/build?aiDraft=1`);
+      router.push(`/app/signups/${phase.response.id}?aiDraft=1`);
     }
   }, [phase, router]);
 

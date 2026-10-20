@@ -9,7 +9,7 @@ vi.mock('@/lib/env', () => ({
 describe('signupLinks', () => {
   it('gives the edit, preview and public pages as absolute URLs', () => {
     expect(signupLinks({ id: 'sig_1', slug: 'bake-sale' })).toEqual({
-      edit: 'https://signup.example.org/app/signups/sig_1/build',
+      edit: 'https://signup.example.org/app/signups/sig_1',
       preview: 'https://signup.example.org/app/signups/sig_1/preview',
       public: 'https://signup.example.org/s/bake-sale',
     });

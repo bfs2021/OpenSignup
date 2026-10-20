@@ -93,7 +93,13 @@ test.describe('help: create and publish your first signup', () => {
       .getByRole('button', { name: /Fruit and water/ })
       .last()
       .click();
+    // The builder saves 800 ms after the last change; wait for it before
+    // leaving the page, as a person would, or the new date is lost.
+    const copySaved = page.waitForResponse(
+      (r) => r.request().method() === 'PATCH' && r.url().includes('/api/slots/'),
+    );
     await slotEditor.getByLabel(`${UI.date} value`).fill('2030-04-13');
+    await copySaved;
     await slotEditor.getByRole('button', { name: UI.done }).click();
     await page.getByText(UI.emptySlot, { exact: true }).click();
     await slotEditor.getByRole('button', { name: UI.delete }).click();
@@ -109,6 +115,29 @@ test.describe('help: create and publish your first signup', () => {
     await expect(fields.getByRole('button', { name: UI.save })).toBeVisible();
     await page.keyboard.press('Escape');
     await expect(fields).toBeHidden();
+
+    // Come back to a draft: from Your signups it opens on the review page.
+    await page.goto('/app');
+    await page.getByRole('link', { name: /Snack duty — Spring season/ }).click();
+    const review = page.getByRole('heading', { name: UI.reviewHeading });
+    await expect(review).toBeVisible();
+    await expect(page.getByText('2 slots · 2 days · 2 people each')).toBeVisible();
+    const signUpCard = page.getByRole('listitem', { name: /What happens when someone signs up/i });
+    await expect(signUpCard.getByRole('button', { name: new RegExp(`^${UI.change}`) })).toBeVisible();
+    await expect(
+      page
+        .getByRole('listitem', { name: /Name and description/i })
+        .getByRole('button', { name: new RegExp(`^${UI.change}`) }),
+    ).toBeVisible();
+    await expect(page.getByRole('button', { name: UI.publishFromReview })).toBeVisible();
+    // The three cards, without the page's heading and buttons around them.
+    await shot(page, page.locator('main ol'), 'check-your-signup');
+    // Change opens the card's form, with Save; Cancel closes it.
+    await signUpCard.getByRole('button', { name: new RegExp(`^${UI.change}`) }).click();
+    await expect(signUpCard.getByRole('button', { name: UI.save })).toBeVisible();
+    await signUpCard.getByRole('button', { name: 'Cancel' }).click();
+    await page.getByRole('link', { name: UI.editInBuilder }).click();
+    await page.waitForURL(/\/build$/);
 
     // Publish and share the link
     const [preview] = await Promise.all([

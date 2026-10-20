@@ -11,6 +11,7 @@
     "/login": 109,
     "/help/[slug]": 113,
     "/app/signups/new": 114,
+    "/app/signups/[id]": 111,
     "/app/signups/[id]/build": 151,
     "/app/signups/[id]/edit": 124,
     "/app/signups/[id]/preview": 132,

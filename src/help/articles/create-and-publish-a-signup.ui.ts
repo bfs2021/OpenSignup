@@ -25,6 +25,13 @@ export const UI = {
   delete: 'Delete',
   // What people see on the signup page for a slot left empty.
   untitledSlot: 'Untitled slot',
+  // A draft with a slot filled in opens on this page, from Your signups and
+  // after drafting from a description.
+  reviewHeading: 'Check your signup, then share it',
+  // Each of its cards' button; the test finds it by its card.
+  change: 'Change',
+  editInBuilder: 'Edit everything in the builder',
+  publishFromReview: 'Publish and get the link',
   preview: 'Preview',
   publish: 'Publish',
   // Phones: the three-dot button's accessible name, then the item it opens.

@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { Banner } from '@/components/banner';
 import { useDismissibleQueryFlag } from '@/hooks/useDismissibleQueryFlag';
+import { AiDraftWarningList } from '@/components/review/AiDraftWarnings';
 import { clearAiDraftWarnings, readAiDraftWarnings } from './ai-draft-warnings';
 
 export function AiDraftBanner({
@@ -45,19 +46,7 @@ export function AiDraftBanner({
         body="Edit anything below, then publish when you're ready."
         onDismiss={onDismiss}
       />
-      {warnings.length > 0 && (
-        <div
-          role="status"
-          className="border-warn/30 bg-warn/10 text-ink rounded-lg border px-5 py-4 text-sm"
-        >
-          <p className="mb-1 font-semibold">A few things to double-check</p>
-          <ul className="list-inside list-disc space-y-1">
-            {warnings.map((w, i) => (
-              <li key={i}>{w}</li>
-            ))}
-          </ul>
-        </div>
-      )}
+      <AiDraftWarningList warnings={warnings} />
     </div>
   );
 }

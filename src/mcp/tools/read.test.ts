@@ -16,7 +16,7 @@ vi.mock('@/services/signups', () => ({
 }));
 vi.mock('@/mcp/links', () => ({
   signupLinks: (r: { id: string; slug: string }) => ({
-    edit: `https://x/app/signups/${r.id}/build`,
+    edit: `https://x/app/signups/${r.id}`,
     preview: `https://x/app/signups/${r.id}/preview`,
     public: `https://x/s/${r.slug}`,
   }),
@@ -84,7 +84,7 @@ describe('read tools', () => {
       createdAt: '2026-09-01T00:00:00.000Z',
       updatedAt: '2026-09-02T00:00:00.000Z',
       links: {
-        edit: 'https://x/app/signups/sig_1/build',
+        edit: 'https://x/app/signups/sig_1',
         preview: 'https://x/app/signups/sig_1/preview',
         public: 'https://x/s/bake-sale',
       },
@@ -137,7 +137,7 @@ describe('read tools', () => {
     expect(body.slots[0]).toEqual({ id: 'slot_1', values: { what: 'Cake' }, capacity: 3, filled: 2, status: 'open', sortOrder: 0 });
     expect(body.fields).toHaveLength(1);
     expect(body.links).toEqual({
-      edit: 'https://x/app/signups/sig_1/build',
+      edit: 'https://x/app/signups/sig_1',
       preview: 'https://x/app/signups/sig_1/preview',
       public: 'https://x/s/bake-sale',
     });

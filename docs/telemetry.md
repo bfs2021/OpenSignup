@@ -50,7 +50,7 @@ by `clientDomain` instead.
 | `signup.archived` | organizer | `{ from, to }` | `services/signups.ts` |
 | `signup.deleted` | organizer | `{ status }` (the status it had when deleted) | `services/signups.ts` |
 | `signup.draft_started` | organizer | `{ mode: 'magic' \| 'manual', device }` (`mode` is the form the page showed: Magic Compose, or the manual title-and-description form) | RSC at `/app/signups/new` |
-| `signup.editor_opened` | organizer | `{ section: 'settings' \| 'responses', device }` | RSC at `/app/signups/[id]/settings` and `/app/signups/[id]/responses` |
+| `signup.editor_opened` | organizer | `{ section: 'settings' \| 'responses' \| 'review', device }` (`review` is a draft's "Check your signup, then share it" page) | RSC at `/app/signups/[id]/settings`, `/app/signups/[id]/responses` and `/app/signups/[id]` |
 | `signup.previewed` | organizer | `{ device }` | RSC at `/app/signups/[id]/preview` |
 | `signup.viewed` | system | `{ uaClass, refererHost, isReturning, signupStatus }` | RSC at `/s/[slug]` |
 | `signup.viewed` | organizer | `{ device }` (the organizer opening the Build tab, not a participant view; filter on `actor_type = 'system'` to leave these out) | RSC at `/app/signups/[id]/build` |

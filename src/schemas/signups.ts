@@ -21,6 +21,10 @@ const SIGNUP_VISIBILITIES = ['public', 'unlisted', 'password'] as const;
  */
 export const REMINDER_LEAD_HOURS = 24;
 
+/** When a reminder goes out, in words: "the day before", as the builder says it. */
+export const REMINDER_BEFORE =
+  REMINDER_LEAD_HOURS === 24 ? 'the day before' : `${REMINDER_LEAD_HOURS} hours before`;
+
 export const SignupSettingsSchema = z
   .object({
     requireEmail: z.boolean().default(true),

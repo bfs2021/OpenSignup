@@ -2,9 +2,11 @@ import { describe, expect, it } from 'vitest';
 import { renderFieldValue } from '@/lib/slot-label';
 import {
   foldPlan,
+  hasFilledSlot,
   peopleLabel,
   sharedValues,
   signupHeadline,
+  whatHappensOnSignUp,
   type SignupSummaryInput,
   type SummaryField,
 } from './signup-summary';
@@ -326,5 +328,61 @@ describe('peopleLabel', () => {
 
   it('says "No limit" for a slot without one', () => {
     expect(peopleLabel(null)).toBe('No limit');
+  });
+});
+
+describe('hasFilledSlot', () => {
+  const what = { ref: 'what', label: 'What', fieldType: 'text' as const, sortOrder: 0 };
+  const date = { ref: 'date', label: 'Date', fieldType: 'date' as const, sortOrder: 1 };
+
+  it('is false for the blank template’s empty row', () => {
+    expect(hasFilledSlot({ fields: [what, date], slots: [{ id: 's1', values: {}, capacity: 1 }] })).toBe(false);
+  });
+
+  it('is false with no slots, and for values that are only blank', () => {
+    expect(hasFilledSlot({ fields: [what], slots: [] })).toBe(false);
+    expect(
+      hasFilledSlot({ fields: [what], slots: [{ id: 's1', values: { what: '' }, capacity: 1 }] }),
+    ).toBe(false);
+  });
+
+  it('is true once any slot has a value in any field', () => {
+    expect(
+      hasFilledSlot({
+        fields: [what, date],
+        slots: [
+          { id: 's1', values: {}, capacity: 1 },
+          { id: 's2', values: { date: '2030-04-06' }, capacity: 1 },
+        ],
+      }),
+    ).toBe(true);
+  });
+
+  it('ignores a value under a ref the signup has no field for', () => {
+    expect(
+      hasFilledSlot({ fields: [what], slots: [{ id: 's1', values: { gone: 'x' }, capacity: 1 }] }),
+    ).toBe(false);
+  });
+});
+
+describe('whatHappensOnSignUp', () => {
+  const before = 'the day before';
+
+  it('promises a reminder only when one will go out', () => {
+    expect(whatHappensOnSignUp({ requireEmail: true, reminders: true, before })).toBe(
+      'They give their name and email, and get a confirmation email now and a reminder the day before their slot.',
+    );
+    expect(whatHappensOnSignUp({ requireEmail: true, reminders: false, before })).toBe(
+      'They give their name and email, and get a confirmation email. No reminder emails.',
+    );
+  });
+
+  it('says email is optional, and who gets emails then', () => {
+    expect(whatHappensOnSignUp({ requireEmail: false, reminders: true, before })).toBe(
+      'They give their name. Email is optional: people who add one get a confirmation, and a reminder the day before their slot.',
+    );
+    expect(whatHappensOnSignUp({ requireEmail: false, reminders: false, before })).toBe(
+      'They give their name. Email is optional: people who add one get a confirmation. No reminder emails.',
+    );
   });
 });

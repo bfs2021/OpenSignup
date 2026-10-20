@@ -1,14 +1,13 @@
 import { REMINDER_SETTLE_HOURS } from '@/lib/reminder-eligibility';
 import { INSTANCE_NAME } from '@/lib/site-config';
-import { REMINDER_LEAD_HOURS } from '@/schemas/signups';
+import { REMINDER_BEFORE } from '@/schemas/signups';
 import { Note, Screenshot, Step, Steps, Ui } from '../components';
 import { UI } from './create-and-publish-a-signup.ui';
 
 export { UI };
 
 // Said the way the builder says it next to the date field.
-const REMINDER_WHEN =
-  REMINDER_LEAD_HOURS === 24 ? 'the day before' : `${REMINDER_LEAD_HOURS} hours before`;
+const REMINDER_WHEN = REMINDER_BEFORE;
 // A sign-up newer than this isn't picked up yet (src/jobs/reminders.ts).
 const SETTLE = REMINDER_SETTLE_HOURS === 1 ? 'an hour' : `${REMINDER_SETTLE_HOURS} hours`;
 
@@ -36,8 +35,9 @@ export function CreateAndPublishASignup() {
             <Note>
               <p>
                 Some sites can fill in a signup for you. If you see <Ui>{UI.composeHeading}</Ui>,
-                describe your signup in a few sentences. Then choose <Ui>{UI.draftCompose}</Ui>, and
-                check every slot before you publish.
+                describe your signup in a few sentences. Then choose <Ui>{UI.draftCompose}</Ui>. Your
+                draft opens on <Ui>{UI.reviewHeading}</Ui>, where you check every slot before you
+                publish, as shown below.
               </p>
               <p>
                 To follow the steps here instead, choose <Ui>{UI.skipCompose}</Ui>.
@@ -122,6 +122,40 @@ export function CreateAndPublishASignup() {
           <Ui>{UI.delete}</Ui>. Don&apos;t leave a slot empty: people see it as{' '}
           <Ui>{UI.untitledSlot}</Ui>.
         </p>
+      </section>
+
+      <section className="space-y-4">
+        <h2 className="text-xl font-semibold tracking-tight">Come back to a draft</h2>
+        <p>
+          You don&apos;t have to publish straight away. Your draft keeps everything you added.
+        </p>
+        <Steps>
+          <Step>
+            <p>
+              On the <Ui>{UI.yourSignups}</Ui> page, choose your draft. Once a slot has something
+              in it, the draft opens on <Ui>{UI.reviewHeading}</Ui>. It shows your slots the way
+              people will see them.
+            </p>
+            <Screenshot
+              src="/help/create-and-publish-a-signup/check-your-signup.png"
+              alt="Check your signup, then share it, with the signup's name, its two slots and what happens when someone signs up."
+              width={760}
+              height={529}
+            />
+          </Step>
+          <Step>
+            <p>
+              To change the name and description, or whether people need to give an email address,
+              choose <Ui>{UI.change}</Ui> next to it. Then choose <Ui>{UI.save}</Ui>.
+            </p>
+          </Step>
+          <Step>
+            <p>
+              To add or change slots, choose <Ui>{UI.editInBuilder}</Ui>. When everything looks
+              right, choose <Ui>{UI.publishFromReview}</Ui> to publish it.
+            </p>
+          </Step>
+        </Steps>
       </section>
 
       <section className="space-y-4">

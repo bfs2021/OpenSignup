@@ -20,9 +20,13 @@ export function publicSignupUrl(slug: string): string {
   return absoluteUrl(`/s/${slug}`);
 }
 
-/** The organizer's build page for a signup, absolute so an assistant can hand it to a person. */
-export function buildPageUrl(signupId: string): string {
-  return absoluteUrl(`/app/signups/${signupId}/build`);
+/**
+ * A signup's own page for its organizer, absolute so an assistant can hand it
+ * to a person. A draft with slots filled in opens on its review page ("Check
+ * your signup, then share it"); anything else opens in the builder.
+ */
+export function signupPageUrl(signupId: string): string {
+  return absoluteUrl(`/app/signups/${signupId}`);
 }
 
 /** The organizer's preview of the public page, which works while the signup is still a draft. */

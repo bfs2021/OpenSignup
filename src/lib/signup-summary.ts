@@ -218,3 +218,42 @@ export function foldPlan(
   });
   return { groups: plan, hiddenCount, total };
 }
+
+/**
+ * Whether any slot has a value worth showing in any field. A draft without
+ * one (the blank template's empty row, or a draft whose rows were all
+ * cleared) needs the builder, not a page asking the organizer to check it.
+ */
+export function hasFilledSlot({
+  fields,
+  slots,
+}: Pick<SignupSummaryInput, 'fields' | 'slots'>): boolean {
+  return slots.some((slot) =>
+    fields.some((field) => renderFieldValue(field, slot.values[field.ref]) !== null),
+  );
+}
+
+/**
+ * "What happens when someone signs up", in plain words, from the two settings
+ * a new organizer is most likely to want to change. `reminders` is whether a
+ * reminder will actually go out: the setting is on and some slot has a date
+ * to time it from. `before` says when ("the day before").
+ */
+export function whatHappensOnSignUp({
+  requireEmail,
+  reminders,
+  before,
+}: {
+  requireEmail: boolean;
+  reminders: boolean;
+  before: string;
+}): string {
+  if (requireEmail) {
+    return reminders
+      ? `They give their name and email, and get a confirmation email now and a reminder ${before} their slot.`
+      : 'They give their name and email, and get a confirmation email. No reminder emails.';
+  }
+  return reminders
+    ? `They give their name. Email is optional: people who add one get a confirmation, and a reminder ${before} their slot.`
+    : 'They give their name. Email is optional: people who add one get a confirmation. No reminder emails.';
+}
