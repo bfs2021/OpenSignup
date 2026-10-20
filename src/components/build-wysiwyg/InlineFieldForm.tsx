@@ -6,6 +6,7 @@ import { FIELD_TYPE_META } from '../build-shared/fieldTypes';
 import {
   FIELD_TYPES,
   TEXT_DEFAULT_MAX_LENGTH,
+  UNTITLED_FIELD_LABEL,
   type FieldType,
   type SlotFieldConfig,
 } from '@/schemas/slot-fields';
@@ -79,7 +80,7 @@ export function InlineFieldForm({
   }, []);
 
   const save = () => {
-    const trimmed = name.trim() || 'Untitled';
+    const trimmed = name.trim() || UNTITLED_FIELD_LABEL;
     // When the type changes on an existing field, reset its config to the
     // type's default. Enum options land via the inline EnumPicker, not here.
     const config: SlotFieldConfig =

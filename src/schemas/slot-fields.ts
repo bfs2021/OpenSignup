@@ -39,6 +39,12 @@ export function toFieldRef(name: string, existingRefs: readonly string[]): strin
 
 export const LabelSchema = z.string().min(1).max(LABEL_MAX_LENGTH);
 
+/**
+ * The name the builder gives a field saved with its name left blank. The
+ * draft checks (`src/lib/draft-checks.ts`) flag a field still called this.
+ */
+export const UNTITLED_FIELD_LABEL = 'Untitled';
+
 /** One choice of an enum field. */
 export const ChoiceSchema = z.string().min(1).max(CHOICE_MAX_LENGTH);
 
