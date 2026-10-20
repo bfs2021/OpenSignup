@@ -24,7 +24,6 @@ import { LOGIN_CODE_MAX_AGE_MS } from './login-code-lifetime';
  */
 
 export const LOGIN_CODE_LENGTH = 6;
-export { LOGIN_CODE_MAX_AGE_MS };
 const PURPOSE = 'login_code';
 
 export function generateLoginCode(): string {

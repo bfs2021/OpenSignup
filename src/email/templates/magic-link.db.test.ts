@@ -32,7 +32,7 @@ describe('MagicLinkEmail', () => {
     const flat = (s: string) => s.replace(/\s+/g, ' ');
     expect(flat(short.text)).toContain('expire in 10 minutes');
     expect(flat(short.text)).toContain('It works for 10 minutes:');
-    expect(short.text).not.toMatch(/15 minutes/);
+    expect(flat(short.text)).not.toMatch(/15 minutes/);
 
     const long = await renderEmail(
       createElement(MagicLinkEmail, {
@@ -47,7 +47,11 @@ describe('MagicLinkEmail', () => {
 
   it('omits the code section when no code is given', async () => {
     const { text } = await renderEmail(
-      createElement(MagicLinkEmail, { url: 'https://signup.example/x', email: 'a@example.com' }),
+      createElement(MagicLinkEmail, {
+        url: 'https://signup.example/x',
+        email: 'a@example.com',
+        expiresInMinutes: 60,
+      }),
     );
     expect(text).not.toMatch(/different device/i);
   });

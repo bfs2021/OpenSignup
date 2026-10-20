@@ -2,7 +2,8 @@ import { eq } from 'drizzle-orm';
 import { afterEach, describe, expect, it } from 'vitest';
 import { getDb } from '@/db/client';
 import { magicLinks } from '@/db/schema/magic-links';
-import { LOGIN_CODE_MAX_AGE_MS, issueLoginCode, redeemLoginCode, sweepExpiredLoginCodes } from './login-code';
+import { issueLoginCode, redeemLoginCode, sweepExpiredLoginCodes } from './login-code';
+import { LOGIN_CODE_MAX_AGE_MS } from './login-code-lifetime';
 
 const db = getDb();
 const EMAIL = 'code-test@example.com';

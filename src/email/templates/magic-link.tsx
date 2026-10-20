@@ -6,12 +6,12 @@ import { EmailButton, EmailHeading, EmailIntro, EmailLayout } from './layout';
 export interface MagicLinkEmailProps {
   url: string;
   email: string;
-  expiresInMinutes?: number;
+  expiresInMinutes: number;
   /** Six-digit code that can be typed into the window that requested the link. */
   code?: string;
 }
 
-export function MagicLinkEmail({ url, email, expiresInMinutes = 60, code }: MagicLinkEmailProps) {
+export function MagicLinkEmail({ url, email, expiresInMinutes, code }: MagicLinkEmailProps) {
   // The code lives for the shorter of the link and the code cap, so the line
   // about it must use that, not the link's lifetime.
   const codeMinutes = loginCodeLifetimeMinutes(expiresInMinutes);
