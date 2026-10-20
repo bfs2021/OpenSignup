@@ -12,9 +12,9 @@ import {
   buildMetaSegments,
   capacityLabel,
   slotAccessibleName,
-  formatGroupLabel,
+  groupSlots,
   pickPrimaryField,
-  renderFieldValue,
+  titleFor,
 } from './slot-format';
 import type {
   OwnCommitment,
@@ -137,43 +137,6 @@ interface SignupViewProps {
   /** Show the preview/closed status banner. Default true; set false when the
    *  surrounding context already conveys preview state (e.g. the build rail). */
   showStateBanner?: boolean;
-}
-
-interface SlotGroup {
-  key: string;
-  label: string;
-  slots: SignupViewSlot[];
-}
-
-function groupSlots(
-  slots: SignupViewSlot[],
-  groupField: SignupViewField | null,
-): SlotGroup[] {
-  if (!groupField) return [{ key: '__all__', label: '', slots }];
-  // A Map keeps its keys in the order they were first set, so the groups come
-  // out in the order of their first slot.
-  const map = new Map<string, SlotGroup>();
-  for (const slot of slots) {
-    const raw = slot.values[groupField.ref];
-    const isUnset = raw === undefined || raw === null || raw === '';
-    const key = isUnset ? '__unset__' : String(raw);
-    const label = formatGroupLabel(groupField, raw);
-    const existing = map.get(key);
-    if (existing) {
-      existing.slots.push(slot);
-    } else {
-      map.set(key, { key, label, slots: [slot] });
-    }
-  }
-  return [...map.values()];
-}
-
-function titleFor(
-  slot: SignupViewSlot,
-  primary: SignupViewField | null,
-): string {
-  const value = primary ? renderFieldValue(primary, slot.values[primary.ref]) : null;
-  return value || 'Untitled slot';
 }
 
 export function SignupViewBody({

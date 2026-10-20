@@ -3,8 +3,10 @@ import {
   buildMetaSegments,
   capacityLabel,
   formatGroupLabel,
+  groupSlots,
   pickPrimaryField,
   renderFieldValue,
+  titleFor,
 } from './slot-format';
 import type { SignupViewField } from './signup-view-types';
 
@@ -102,6 +104,69 @@ describe('buildMetaSegments', () => {
     expect(
       buildMetaSegments({ fields, slot: reordered }),
     ).toEqual(['Game 1', 'vs Hawks', 'Field B']);
+  });
+
+  it('skips every ref in omitRefs, alongside primary and group', () => {
+    expect(
+      buildMetaSegments({ fields, slot, primaryRef: 'game', omitRefs: new Set(['field']) }),
+    ).toEqual(['vs Hawks']);
+    expect(
+      buildMetaSegments({ fields, slot, omitRefs: new Set(['game', 'opponent']) }),
+    ).toEqual(['Field B']);
+  });
+
+  it('treats an empty omitRefs as leaving nothing extra out', () => {
+    expect(buildMetaSegments({ fields, slot, omitRefs: new Set() })).toEqual([
+      'Game 1',
+      'vs Hawks',
+      'Field B',
+    ]);
+  });
+});
+
+describe('groupSlots', () => {
+  const day: SignupViewField = { ref: 'day', label: 'Day', fieldType: 'date' };
+  const row = (id: string, values: Record<string, unknown>) => ({ id, values });
+
+  it('puts every slot in one unlabelled group when there is no group field', () => {
+    const slots = [row('a', { day: '2026-04-25' }), row('b', { day: '2026-04-26' })];
+    expect(groupSlots(slots, null)).toEqual([{ key: '__all__', label: '', slots }]);
+  });
+
+  it('groups by the raw value, in the order each group first appears', () => {
+    const slots = [
+      row('a', { day: '2026-04-26' }),
+      row('b', { day: '2026-04-25' }),
+      row('c', { day: '2026-04-26' }),
+    ];
+    const groups = groupSlots(slots, day);
+    expect(groups.map((g) => g.key)).toEqual(['2026-04-26', '2026-04-25']);
+    expect(groups.map((g) => g.slots.map((s) => s.id))).toEqual([['a', 'c'], ['b']]);
+  });
+
+  it('labels a group the way formatGroupLabel does', () => {
+    const [group] = groupSlots([row('a', { day: '2026-04-25' })], day);
+    expect(group?.label).toBe('Sat, Apr 25');
+  });
+
+  it('collects slots with no value under one "(no <label>)" group', () => {
+    const slots = [row('a', {}), row('b', { day: '' }), row('c', { day: null })];
+    expect(groupSlots(slots, day)).toEqual([{ key: '__unset__', label: '(no day)', slots }]);
+  });
+});
+
+describe('titleFor', () => {
+  const task = text('task', 'Task');
+
+  it("renders the primary field's value", () => {
+    expect(titleFor({ values: { task: 'Snack duty' } }, task)).toBe('Snack duty');
+    const time: SignupViewField = { ref: 't', label: 'Time', fieldType: 'time' };
+    expect(titleFor({ values: { t: '18:30' } }, time)).toBe('6:30 PM');
+  });
+
+  it('falls back to "Untitled slot" when the value is empty or there is no primary', () => {
+    expect(titleFor({ values: { task: '' } }, task)).toBe('Untitled slot');
+    expect(titleFor({ values: { task: 'Snack duty' } }, null)).toBe('Untitled slot');
   });
 });
 

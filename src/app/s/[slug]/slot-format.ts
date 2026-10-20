@@ -9,21 +9,74 @@ export function formatGroupLabel(field: SignupViewField, raw: unknown): string {
   return renderFieldValue(field, raw) ?? `(no ${field.label.toLowerCase()})`;
 }
 
+/**
+ * One section of the slot list: every slot sharing a value of the group
+ * field, or, with no group field, the single unlabelled section holding them
+ * all. Generic over the slot so the organizer's review page can group the
+ * slots it loads without dressing them up as `SignupViewSlot`s.
+ */
+export interface SlotGroup<S = SignupViewSlot> {
+  key: string;
+  label: string;
+  slots: S[];
+}
+
+export function groupSlots<S extends Pick<SignupViewSlot, 'values'>>(
+  slots: readonly S[],
+  groupField: SignupViewField | null,
+): SlotGroup<S>[] {
+  if (!groupField) return [{ key: '__all__', label: '', slots: [...slots] }];
+  // A Map keeps its keys in the order they were first set, so the groups come
+  // out in the order of their first slot.
+  const map = new Map<string, SlotGroup<S>>();
+  for (const slot of slots) {
+    const raw = slot.values[groupField.ref];
+    const isUnset = raw === undefined || raw === null || raw === '';
+    const key = isUnset ? '__unset__' : String(raw);
+    const label = formatGroupLabel(groupField, raw);
+    const existing = map.get(key);
+    if (existing) {
+      existing.slots.push(slot);
+    } else {
+      map.set(key, { key, label, slots: [slot] });
+    }
+  }
+  return [...map.values()];
+}
+
+/** A row's title: its primary field's value, or "Untitled slot". */
+export function titleFor(
+  slot: Pick<SignupViewSlot, 'values'>,
+  primary: SignupViewField | null,
+): string {
+  const value = primary ? renderFieldValue(primary, slot.values[primary.ref]) : null;
+  return value || 'Untitled slot';
+}
+
+/**
+ * The line under a row's title: every other field's value, in field
+ * order, leaving out the title's own field, the group field (its header
+ * already says it) and any ref in `omitRefs` (the organizer's review page
+ * passes the fields every slot shares, which it says once above the list).
+ */
 export function buildMetaSegments({
   fields,
   slot,
   primaryRef,
   groupRef,
+  omitRefs,
 }: {
   fields: readonly SignupViewField[];
   slot: Pick<SignupViewSlot, 'values'>;
   primaryRef?: string | null;
   groupRef?: string | null;
+  omitRefs?: ReadonlySet<string>;
 }): string[] {
   const out: string[] = [];
   for (const f of fields) {
     if (f.ref === primaryRef) continue;
     if (f.ref === groupRef) continue;
+    if (omitRefs?.has(f.ref)) continue;
     const formatted = renderFieldValue(f, slot.values[f.ref]);
     if (!formatted) continue;
     out.push(formatted);
