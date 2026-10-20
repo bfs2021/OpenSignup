@@ -9,11 +9,7 @@
  */
 export const LOGIN_CODE_MAX_AGE_MS = 15 * 60 * 1000;
 
-/**
- * The code's real lifetime in whole minutes, given the link's lifetime: the
- * shorter of the two. This is what the email must say, so it never promises
- * a code that has already expired.
- */
-export function loginCodeLifetimeMinutes(linkMinutes: number): number {
-  return Math.min(linkMinutes, LOGIN_CODE_MAX_AGE_MS / 60_000);
+/** The code expires at the earlier of the link expiry and its maximum age. */
+export function loginCodeExpiry(linkExpiresAt: Date, now = new Date()): Date {
+  return new Date(Math.min(linkExpiresAt.getTime(), now.getTime() + LOGIN_CODE_MAX_AGE_MS));
 }

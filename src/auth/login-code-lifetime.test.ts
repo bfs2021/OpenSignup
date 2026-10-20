@@ -1,18 +1,18 @@
 import { describe, expect, it } from 'vitest';
-import { LOGIN_CODE_MAX_AGE_MS, loginCodeLifetimeMinutes } from './login-code-lifetime';
+import { LOGIN_CODE_MAX_AGE_MS, loginCodeExpiry } from './login-code-lifetime';
 
-describe('loginCodeLifetimeMinutes', () => {
-  it('caps the code at 15 minutes', () => {
-    expect(LOGIN_CODE_MAX_AGE_MS).toBe(15 * 60 * 1000);
+describe('loginCodeExpiry', () => {
+  const now = new Date('2026-10-20T12:00:00.000Z');
+
+  it('returns the persisted expiry for a short-lived link', () => {
+    expect(loginCodeExpiry(new Date(now.getTime() + 60_000), now)).toEqual(
+      new Date(now.getTime() + 60_000),
+    );
   });
 
-  it.each([
-    [1, 1],
-    [14, 14],
-    [15, 15],
-    [16, 15],
-    [10080, 15],
-  ])('a %i minute link gives a %i minute code', (linkMinutes, codeMinutes) => {
-    expect(loginCodeLifetimeMinutes(linkMinutes)).toBe(codeMinutes);
+  it('caps expiry at the per-email guess window', () => {
+    expect(loginCodeExpiry(new Date(now.getTime() + 60 * 60_000), now)).toEqual(
+      new Date(now.getTime() + LOGIN_CODE_MAX_AGE_MS),
+    );
   });
 });
