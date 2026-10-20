@@ -732,8 +732,21 @@ describe('signups service (db)', () => {
       expect(r.error.code).toBe('conflict');
       expect(r.error.received).toBe('open');
       expect(r.error.expected).toBe('draft');
+      // Already open: a second click, not a publish anyone was refused.
+      expect(await refusedPublishes(created.value.id)).toEqual([]);
+    });
+
+    it('records a publish refused because the signup was closed meanwhile', async () => {
+      const created = await createSignup(fx.db, fx.actor, fx.workspaceId, validCreateInput('Stale'));
+      if (!created.ok) throw new Error('setup failed');
+      await withSlot(created.value.id);
+      if (!(await publishSignup(fx.db, fx.actor, created.value.id)).ok) throw new Error('setup failed');
+      if (!(await closeSignup(fx.db, fx.actor, created.value.id)).ok) throw new Error('setup failed');
+
+      const r = await publishSignup(fx.db, fx.actor, created.value.id);
+      expect(r.ok).toBe(false);
       expect(await refusedPublishes(created.value.id)).toEqual([
-        { code: 'conflict', reason: 'not_draft', status: 'open' },
+        { code: 'conflict', reason: 'not_draft', status: 'closed' },
       ]);
     });
 

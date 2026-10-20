@@ -352,11 +352,25 @@ export async function publishSignup(
 }
 
 /**
- * Telemetry for a publish the service turned down: no slots yet, or the
- * signup was no longer a draft (another tab, or a second click). Written
- * after the transaction, best effort, since it describes no change. A
- * viewer's refusal is thrown by the policy guard before this point and is
- * not recorded.
+ * What a refused publish records, by the field its conflict names: no slots
+ * yet, or a signup that stopped being a draft since the page loaded (closed
+ * or archived in another tab). Null for anything else, including a signup
+ * that is already open: a second click, or a retry after a publish that
+ * worked, is not a publish anyone was refused.
+ */
+function publishRefusal(error: ServiceError): Record<string, unknown> | null {
+  if (error.code !== 'conflict') return null;
+  if (error.field === 'slots') return { code: error.code, reason: 'no_slots' };
+  if (error.field === 'status' && error.received !== 'open') {
+    return { code: error.code, reason: 'not_draft', status: error.received };
+  }
+  return null;
+}
+
+/**
+ * Telemetry for a publish the service turned down. Written after the
+ * transaction, best effort, since it describes no change. A viewer's refusal
+ * is thrown by the policy guard before this point and is not recorded.
  */
 async function recordPublishRefused(
   db: Db,
@@ -365,11 +379,8 @@ async function recordPublishRefused(
   workspaceId: string | null,
   error: ServiceError,
 ): Promise<void> {
-  if (error.code !== 'conflict') return;
-  const payload =
-    error.field === 'status'
-      ? { code: error.code, reason: 'not_draft', status: error.received }
-      : { code: error.code, reason: 'no_slots' };
+  const payload = publishRefusal(error);
+  if (!payload) return;
   await recordActivityBestEffort(db, {
     signupId,
     workspaceId,
@@ -479,6 +490,7 @@ async function transitionStatus(
       if (slotRows.length < 1) {
         return err(
           serviceError('conflict', 'publish requires at least one slot', {
+            field: 'slots',
             suggestion: 'add a slot before publishing',
           }),
         );
@@ -505,7 +517,7 @@ async function transitionStatus(
     });
     return ok(next);
   });
-  if (!result.ok && to === 'open') {
+  if (!result.ok && eventType === 'signup.published') {
     await recordPublishRefused(db, actor, signupId, found.workspaceId, result.error);
   }
   return result;

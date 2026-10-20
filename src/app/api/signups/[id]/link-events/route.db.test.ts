@@ -3,6 +3,7 @@ import { and, eq } from 'drizzle-orm';
 import { NextRequest } from 'next/server';
 import { getDb } from '@/db/client';
 import { activity } from '@/db/schema/activity';
+import { rateLimits } from '@/db/schema/rate-limits';
 import { workspaceMembers } from '@/db/schema/members';
 import { organizers } from '@/db/schema/organizers';
 import { workspaces } from '@/db/schema/workspaces';
@@ -37,7 +38,7 @@ describe('POST /api/signups/[id]/link-events (db)', () => {
   };
   let signupId: string;
 
-  const rows = (eventType: 'signup.link_copied' | 'signup.link_shared') =>
+  const rows = (eventType: 'signup.link_copied') =>
     db
       .select({ actorId: activity.actorId, payload: activity.payload })
       .from(activity)
@@ -88,12 +89,23 @@ describe('POST /api/signups/[id]/link-events (db)', () => {
     expect(await rows('signup.link_copied')).toEqual([
       { actorId: organizerId, payload: { surface: 'header', status: 'draft' } },
     ]);
-    expect(await rows('signup.link_shared')).toEqual([]);
   });
 
-  it('records a share as its own event', async () => {
-    expect((await beacon(signupId, 'event=shared&surface=header')).status).toBe(200);
-    expect(await rows('signup.link_shared')).toHaveLength(1);
+  it('stops counting past 60 copies an hour from one organizer', async () => {
+    const otherOrganizer = makeId('org');
+    session.actor = { ...owner, id: otherOrganizer };
+    try {
+      await db.insert(rateLimits).values({
+        bucket: 'signup.link_events',
+        subject: otherOrganizer,
+        windowStart: new Date(Math.floor(Date.now() / 3_600_000) * 3_600_000),
+        count: 60,
+      });
+      expect((await beacon(signupId, 'event=copied&surface=header')).status).toBe(429);
+      expect(await rows('signup.link_copied')).toEqual([]);
+    } finally {
+      await db.delete(rateLimits).where(eq(rateLimits.subject, otherOrganizer));
+    }
   });
 
   it('lets a viewer record a copy: copying the link changes nothing', async () => {
@@ -117,6 +129,7 @@ describe('POST /api/signups/[id]/link-events (db)', () => {
 
   it('refuses an event or surface it doesn’t know', async () => {
     expect((await beacon(signupId, 'event=opened&surface=header')).status).toBe(400);
+    expect((await beacon(signupId, 'event=shared&surface=header')).status).toBe(400);
     expect((await beacon(signupId, 'event=copied&surface=elsewhere')).status).toBe(400);
     expect((await beacon(signupId, 'event=copied')).status).toBe(400);
     expect(await rows('signup.link_copied')).toEqual([]);
@@ -133,5 +146,12 @@ describe('POST /api/signups/[id]/link-events (db)', () => {
     if (!created.ok) throw new Error(created.error.message);
     await deleteSignup(db, owner, created.value.id);
     expect((await beacon(created.value.id, 'event=copied&surface=header')).status).toBe(404);
+    const written = await db
+      .select()
+      .from(activity)
+      .where(
+        and(eq(activity.signupId, created.value.id), eq(activity.eventType, 'signup.link_copied')),
+      );
+    expect(written).toEqual([]);
   });
 });

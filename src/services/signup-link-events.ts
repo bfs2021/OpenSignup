@@ -15,11 +15,10 @@ const SignupLinkEventInputSchema = z.object({
 
 const EVENT_TYPES = {
   copied: 'signup.link_copied',
-  shared: 'signup.link_shared',
 } as const;
 
 /**
- * Records that an organizer copied or shared a signup's public link. Anyone
+ * Records that an organizer copied a signup's public link. Anyone
  * who can see the signup can copy its link, a viewer included, so this needs
  * read access, not write. Telemetry describing no change: written outside a
  * transaction, best effort. The status says whether the link worked yet (a

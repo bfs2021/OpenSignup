@@ -1,5 +1,3 @@
-import { headers } from 'next/headers';
-import { after } from 'next/server';
 import { getDb } from '@/db/client';
 import { requireOrganizerSession, toActor } from '@/auth/session';
 import { loadSignupForOrganizer } from '@/services/signups.cached';
@@ -8,7 +6,7 @@ import {
   howCommitmentsEnded,
   listCommitmentsForSignup,
 } from '@/services/commitments';
-import { readRequestSignals, recordOrganizerView } from '@/lib/view-tracker';
+import { trackOrganizerView } from '@/lib/view-tracker';
 import { StatusPill } from '@/components/status-pill';
 import { summarizeSlot, summarizeSlotValues } from '@/lib/slot-summary';
 import { RemoveCommitmentForm } from './remove-commitment-form';
@@ -21,17 +19,13 @@ export default async function ResponsesTab({ params }: PageParams) {
   const result = await loadSignupForOrganizer(toActor(session), id);
   if (!result.ok) return null;
   const sig = result.value;
-  const signals = readRequestSignals(await headers());
-  after(() =>
-    recordOrganizerView({
-      actor: { actorId: session.organizerId, actorType: 'organizer' },
-      signupId: sig.id,
-      workspaceId: sig.workspaceId,
-      eventType: 'signup.editor_opened',
-      signals,
-      payload: { section: 'responses' },
-    }),
-  );
+  await trackOrganizerView({
+    actor: { actorId: session.organizerId, actorType: 'organizer' },
+    signupId: sig.id,
+    workspaceId: sig.workspaceId,
+    eventType: 'signup.editor_opened',
+    payload: { section: 'responses' },
+  });
   const [commitments, ended] = await Promise.all([
     listCommitmentsForSignup(getDb(), id),
     howCommitmentsEnded(getDb(), sig),

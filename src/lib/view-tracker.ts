@@ -1,3 +1,5 @@
+import { headers } from 'next/headers';
+import { after } from 'next/server';
 import type { ActivityEvent } from '@/db/schema/activity';
 import { getDb } from '@/db/client';
 import { recordActivityBestEffort, type ActivityActor } from '@/lib/activity';
@@ -30,14 +32,16 @@ export type DeviceClass = 'phone' | 'computer' | 'unknown';
  * Whether a request came from a phone or a computer, for organizer page views
  * (a draft abandoned on a phone reads differently from one abandoned at a
  * desk). Chromium says so in the `Sec-CH-UA-Mobile` hint; for the rest, a
- * phone's User-Agent carries "Mobi" (iPhone, Android phones), which tablets
- * and desktops leave out. `uaClass` can't tell the two apart: it only sorts
- * browsers from bots.
+ * phone's User-Agent carries "Mobi" (iPhone, Android phones), which Android
+ * tablets and desktops leave out. An iPad's Safari can carry it too, so an
+ * iPad is a computer first, as tablets are. `uaClass` can't tell phones from
+ * computers: it only sorts browsers from bots.
  */
 export function classifyDevice(signals: Pick<RequestSignals, 'userAgent' | 'mobileHint'>): DeviceClass {
   if (signals.mobileHint === '?1') return 'phone';
   if (signals.mobileHint === '?0') return 'computer';
   if (!signals.userAgent) return 'unknown';
+  if (/iPad/.test(signals.userAgent)) return 'computer';
   return /Mobi/i.test(signals.userAgent) ? 'phone' : 'computer';
 }
 
@@ -173,4 +177,16 @@ export async function recordOrganizerView(args: {
     ...row,
     payload: { ...payload, device: classifyDevice(signals) },
   });
+}
+
+/**
+ * What an organizer page calls to record its view: reads the request's
+ * signals now, since `after()` runs outside the request where `headers()`
+ * isn't allowed, and writes the row once the page has been sent.
+ */
+export async function trackOrganizerView(
+  args: Omit<Parameters<typeof recordOrganizerView>[0], 'signals'>,
+): Promise<void> {
+  const signals = readRequestSignals(await headers());
+  after(() => recordOrganizerView({ ...args, signals }));
 }

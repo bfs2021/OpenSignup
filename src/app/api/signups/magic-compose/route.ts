@@ -5,7 +5,7 @@ import { getDb, type Db } from '@/db/client';
 import { activityActor, recordActivityBestEffort } from '@/lib/activity';
 import { magicComposeEnabled } from '@/lib/env';
 import { fail, handle, ok, readJson } from '@/lib/api-response';
-import { serviceError } from '@/lib/errors';
+import { serviceError, ServiceException } from '@/lib/errors';
 import { link, publicSignupUrl } from '@/lib/links';
 import { log } from '@/lib/log';
 import { consumeRateLimit, RateLimits } from '@/lib/rate-limit';
@@ -30,7 +30,7 @@ async function recordFailed(
   db: Db,
   actor: Actor,
   workspaceId: string,
-  code: MagicComposeErrorCode | 'refusal',
+  code: MagicComposeErrorCode | 'refusal' | 'not_saved' | 'over_limit',
 ): Promise<void> {
   await recordActivityBestEffort(db, {
     workspaceId,
@@ -79,7 +79,16 @@ export async function POST(req: NextRequest) {
     }
     const userPrompt = parsed.data.prompt;
 
-    await consumeRateLimit(db, RateLimits.magicComposePerOrganizer, actor.id);
+    try {
+      await consumeRateLimit(db, RateLimits.magicComposePerOrganizer, actor.id);
+    } catch (e) {
+      // The organizer used up this instance's quota: as much a failed draft to
+      // them as the provider's own limit, so it's counted, then answered 429.
+      if (e instanceof ServiceException && e.serviceError.code === 'rate_limited') {
+        await recordFailed(db, actor, session.defaultWorkspaceId, 'over_limit');
+      }
+      throw e;
+    }
 
     const client = defaultLlmClient();
     const raw = await client.generateDraft(buildMessages(userPrompt), req.signal);
@@ -151,7 +160,10 @@ export async function POST(req: NextRequest) {
     const persisted = await persistDraft(db, actor, session.defaultWorkspaceId, draft.data, {
       logContext: { promptLength: userPrompt.length },
     });
-    if (!persisted.ok) return fail(persisted.error);
+    if (!persisted.ok) {
+      await recordFailed(db, actor, session.defaultWorkspaceId, 'not_saved');
+      return fail(persisted.error);
+    }
     const { signup: created, template, groupByFieldRefs, warnings } = persisted.value;
 
     return ok(

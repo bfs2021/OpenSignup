@@ -90,6 +90,9 @@ describe('classifyDevice', () => {
   });
 
   it('counts tablets and desktops as computers', () => {
+    const iPadMini =
+      'Mozilla/5.0 (iPad; CPU OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1';
+    expect(classifyDevice({ userAgent: iPadMini })).toBe('computer');
     expect(classifyDevice({ userAgent: androidTablet })).toBe('computer');
     expect(classifyDevice({ userAgent: mac })).toBe('computer');
   });

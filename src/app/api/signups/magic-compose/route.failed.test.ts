@@ -44,7 +44,16 @@ vi.mock('@/lib/activity', async (importOriginal) => ({
 }));
 
 import { recordActivityBestEffort } from '@/lib/activity';
+import { serviceError, ServiceException } from '@/lib/errors';
+import { persistDraft } from '@/lib/magic-compose/persist';
+import { consumeRateLimit } from '@/lib/rate-limit';
 import { POST } from './route';
+
+const goodDraft = {
+  title: 'Snack duty',
+  fields: [{ ref: 'what', label: 'What', fieldType: 'text' }],
+  slots: [{ values: { what: 'Fruit' } }],
+};
 
 function compose(prompt = 'Snack duty for six Saturday games', init: { signal?: AbortSignal } = {}) {
   return POST(
@@ -96,15 +105,28 @@ describe('POST /api/signups/magic-compose records magic_compose.failed', () => {
   });
 
   it('records aborted when the organizer left before the draft was saved', async () => {
-    llm.result = ok({
-      title: 'Snack duty',
-      fields: [{ ref: 'what', label: 'What', fieldType: 'text' }],
-      slots: [{ values: { what: 'Fruit' } }],
-    });
+    llm.result = ok(goodDraft);
     const controller = new AbortController();
     controller.abort();
     expect((await compose(undefined, { signal: controller.signal })).status).toBe(500);
     expect(recordedCodes().map((r) => r.payload)).toEqual([{ code: 'aborted' }]);
+  });
+
+  it('records not_saved when the draft couldn’t be saved', async () => {
+    llm.result = ok(goodDraft);
+    vi.mocked(persistDraft).mockResolvedValueOnce(
+      err(serviceError('invalid_input', 'template "magic-compose" has an invalid slot')),
+    );
+    expect((await compose()).status).toBe(400);
+    expect(recordedCodes().map((r) => r.payload)).toEqual([{ code: 'not_saved' }]);
+  });
+
+  it('records over_limit when the organizer has used up the hour’s drafts, and still answers 429', async () => {
+    vi.mocked(consumeRateLimit).mockRejectedValueOnce(
+      new ServiceException(serviceError('rate_limited', 'too many requests')),
+    );
+    expect((await compose()).status).toBe(429);
+    expect(recordedCodes().map((r) => r.payload)).toEqual([{ code: 'over_limit' }]);
   });
 
   it('records nothing for a prompt it refuses before calling the AI', async () => {

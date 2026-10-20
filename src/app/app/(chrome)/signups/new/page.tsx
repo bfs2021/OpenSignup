@@ -1,9 +1,7 @@
-import { headers } from 'next/headers';
-import { after } from 'next/server';
 import { requireOrganizerSession } from '@/auth/session';
 import { AsyncSubmitButton } from '@/components/ui/async-submit-button';
 import { FormError } from '@/components/ui/form-error';
-import { readRequestSignals, recordOrganizerView } from '@/lib/view-tracker';
+import { trackOrganizerView } from '@/lib/view-tracker';
 import { magicComposeEnabled } from '@/lib/env';
 import { MagicComposeRoot } from '@/components/magic-compose/MagicComposeRoot';
 import { createSignupAction } from './actions';
@@ -20,17 +18,13 @@ export default async function NewSignupPage({ searchParams }: PageProps) {
 
   if (session.defaultWorkspaceId) {
     const workspaceId = session.defaultWorkspaceId;
-    const signals = readRequestSignals(await headers());
-    after(() =>
-      recordOrganizerView({
-        actor: { actorId: session.organizerId, actorType: 'organizer' },
-        signupId: null,
-        workspaceId,
-        eventType: 'signup.draft_started',
-        payload: { mode: useMagic ? 'magic' : 'manual' },
-        signals,
-      }),
-    );
+    await trackOrganizerView({
+      actor: { actorId: session.organizerId, actorType: 'organizer' },
+      signupId: null,
+      workspaceId,
+      eventType: 'signup.draft_started',
+      payload: { mode: useMagic ? 'magic' : 'manual' },
+    });
   }
 
   if (useMagic) {
