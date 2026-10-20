@@ -4,7 +4,7 @@ import { useEffect, useRef, useState, type ReactNode, type RefObject } from 'rea
 import { useFormStatus } from 'react-dom';
 import { AsyncSubmitButton } from '@/components/ui/async-submit-button';
 import { FormError } from '@/components/ui/form-error';
-import { removeCommitmentAction } from '../actions';
+import { removeCommitmentAction } from '../../actions';
 
 interface Props {
   signupId: string;

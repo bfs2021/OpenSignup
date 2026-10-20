@@ -5,7 +5,7 @@ import { requiresEmail } from '@/schemas/signups';
 import { loadSignupForOrganizer } from '@/services/signups.cached';
 import { trackOrganizerView } from '@/lib/view-tracker';
 import { FormError } from '@/components/ui/form-error';
-import { setRequireEmailAction } from '../actions';
+import { setRequireEmailAction } from '../../actions';
 import { DeleteSignupForm } from './delete-signup-form';
 
 type PageParams = {

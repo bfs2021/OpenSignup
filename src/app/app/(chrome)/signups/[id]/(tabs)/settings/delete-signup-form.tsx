@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import { AsyncSubmitButton } from '@/components/ui/async-submit-button';
-import { deleteSignupAction } from '../actions';
+import { deleteSignupAction } from '../../actions';
 
 interface Props {
   signupId: string;

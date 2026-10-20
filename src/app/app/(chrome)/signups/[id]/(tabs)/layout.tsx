@@ -9,7 +9,7 @@ import { AiDraftBanner } from '@/components/magic-compose/AiDraftBanner';
 import { PublishedBanner } from '@/components/signup/PublishedBanner';
 import { SignupLoadError } from '@/components/signup/SignupLoadError';
 import type { SignupStatus } from '@/schemas/signups';
-import { closeAction, publishAction } from './actions';
+import { closeAction, publishAction } from '../actions';
 
 type LayoutProps = {
   children: React.ReactNode;
