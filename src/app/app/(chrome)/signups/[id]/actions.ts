@@ -8,7 +8,7 @@ import { SAVE_ERROR_MESSAGE } from '@/components/ui/save-notice';
 import { ServiceException, type ErrorCode } from '@/lib/errors';
 import { removeCommitment } from '@/services/commitments';
 import { closeSignup, deleteSignup, publishSignup, updateSignup } from '@/services/signups';
-import { removeRefusal } from './(tabs)/responses/remove-refusal';
+import { removeRefusal } from './remove-refusal';
 
 function revalidateSignup(id: string) {
   revalidatePath(`/app/signups/${id}`, 'layout');
