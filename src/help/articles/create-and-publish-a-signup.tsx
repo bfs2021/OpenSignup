@@ -164,7 +164,14 @@ export function CreateAndPublishASignup() {
           </Step>
           <Step>
             <p>
-              To add or change slots, choose <Ui>{UI.editInBuilder}</Ui>. When everything looks
+              To change a slot, choose it. Change what you need, like its date or its{' '}
+              <Ui>{UI.capacity}</Ui>, then choose <Ui>{UI.done}</Ui> to save it. To close it without
+              saving, choose <Ui>{UI.cancel}</Ui>.
+            </p>
+          </Step>
+          <Step>
+            <p>
+              To add or remove slots, choose <Ui>{UI.editInBuilder}</Ui>. When everything looks
               right, choose <Ui>{UI.publishFromReview}</Ui> to publish it. Then send the link, as
               shown below.
             </p>

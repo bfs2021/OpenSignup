@@ -4,6 +4,7 @@ import type { SlotFieldDefinition, SlotFieldConfig } from '@/schemas/slot-fields
 import type { SignupSettings } from '@/schemas/signups';
 import type { ErrorCode } from '@/lib/errors';
 import { resolveAnchorRef } from '@/lib/reminder-fields';
+import { toSlotValues, toStringValues } from './slotValues';
 
 // ---------------------------------------------------------------------------
 // State types
@@ -210,14 +211,6 @@ function toBuildRow(slot: BuildSlot): BuildRow {
     sortOrder: slot.sortOrder,
     values: toStringValues(slot.values),
   };
-}
-
-function toStringValues(values: Record<string, unknown>): Record<string, string> {
-  const result: Record<string, string> = {};
-  for (const [k, v] of Object.entries(values)) {
-    result[k] = v === null || v === undefined ? '' : String(v);
-  }
-  return result;
 }
 
 /**
@@ -597,20 +590,10 @@ export function useBuildState(
 
   /** PATCHes every value `row` holds, so the slot ends up as the row shows it. */
   async function saveRowValues(row: BuildRow): Promise<void> {
-    const fields = stateRef.current.fields;
-    // Coerce by field type so numeric cells round-trip as numbers and
-    // empty strings on number fields drop out of the patch body.
-    const typedValues: Record<string, unknown> = {};
-    for (const [ref, strVal] of Object.entries(row.values)) {
-      const fld = fields.find((f) => f.ref === ref);
-      if (fld?.config.fieldType === 'number') {
-        const n = Number(strVal);
-        if (strVal !== '' && Number.isFinite(n)) typedValues[ref] = n;
-      } else {
-        typedValues[ref] = strVal;
-      }
-    }
-    await send('PATCH', `/api/slots/${row.id}`, { values: typedValues });
+    // Numbers go as numbers, as the review page sends them (slotValues.ts).
+    await send('PATCH', `/api/slots/${row.id}`, {
+      values: toSlotValues(row.values, stateRef.current.fields),
+    });
   }
 
   function flushTimer(key: string, saveFn: () => Promise<void>) {

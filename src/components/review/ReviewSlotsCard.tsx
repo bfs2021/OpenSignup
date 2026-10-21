@@ -18,6 +18,7 @@ import type { SlotFieldDefinition } from '@/schemas/slot-fields';
 import { AiDraftWarnings } from './AiDraftWarnings';
 import { ReviewCard } from './ReviewCard';
 import { ReviewNotices } from './ReviewNotices';
+import { ReviewSlotEditing, ReviewSlotRow } from './ReviewSlotRow';
 
 interface ReviewSlot {
   id: string;
@@ -32,6 +33,8 @@ interface ReviewSlot {
  * public page lists them (its grouping, titles and values), folded to the
  * first group or six rows. Server-rendered: groups fold with <details>, and
  * "Show all" is a link that renders the page again with everything open.
+ * Each row is a button that opens the builder's slot editor under it
+ * (`ReviewSlotRow`); anything bigger is done in the builder.
  */
 export function ReviewSlotsCard({
   signupId,
@@ -66,6 +69,14 @@ export function ReviewSlotsCard({
     groups.map((g) => ({ key: g.key, size: g.slots.length })),
     groupField !== null,
   );
+  // As the builder holds them, for its slot editor.
+  const editorFields = fields.map((f) => ({
+    id: f.id,
+    ref: f.ref,
+    name: f.label,
+    config: f.config,
+    sortOrder: f.sortOrder,
+  }));
 
   return (
     <ReviewCard
@@ -86,76 +97,82 @@ export function ReviewSlotsCard({
         builderHref={builderHref}
         labelMaxLength={labelMaxLength}
       />
-      <div id="slots" className="flex scroll-mt-4 flex-col gap-3.5 pt-1">
-        {groups.map((group, i) => {
-          const fold = plan.groups[i];
-          // A closed group holds all its rows, out of sight until it's opened;
-          // an open one shows the rows the fold allows.
-          const shown =
-            showAll || !fold || !fold.open ? group.slots : group.slots.slice(0, fold.visible);
-          const rows = (
-            <ul className="flex flex-col gap-2">
-              {shown.map((slot) => {
-                const meta = buildMetaSegments({
-                  fields,
-                  slot,
-                  primaryRef: primary?.ref,
-                  groupRef: groupField?.ref ?? null,
-                  omitRefs,
-                });
-                return (
-                  <li
-                    key={slot.id}
-                    className="flex items-center justify-between gap-3 rounded-lg border border-surface-sunk bg-white px-3.5 py-3"
-                  >
-                    <span className="flex min-w-0 flex-col gap-0.5">
-                      <span className="text-sm font-semibold break-words">
-                        {titleFor(slot, primary)}
+      <ReviewSlotEditing
+        signupId={signupId}
+        fields={editorFields}
+        slots={slots.map(({ id, values, capacity }) => ({ id, values, capacity }))}
+      >
+        <div id="slots" className="flex scroll-mt-4 flex-col gap-3.5 pt-1">
+          {groups.map((group, i) => {
+            const fold = plan.groups[i];
+            // A closed group holds all its rows, out of sight until it's opened;
+            // an open one shows the rows the fold allows.
+            const shown =
+              showAll || !fold || !fold.open ? group.slots : group.slots.slice(0, fold.visible);
+            const rows = (
+              <ul className="flex flex-col gap-2">
+                {shown.map((slot) => {
+                  const meta = buildMetaSegments({
+                    fields,
+                    slot,
+                    primaryRef: primary?.ref,
+                    groupRef: groupField?.ref ?? null,
+                    omitRefs,
+                  });
+                  const title = titleFor(slot, primary);
+                  return (
+                    <ReviewSlotRow
+                      key={slot.id}
+                      slotId={slot.id}
+                      label={`Edit slot \u2014 ${[title, ...meta].join(' · ')}`}
+                    >
+                      <span className="flex min-w-0 flex-col gap-0.5">
+                        <span className="break-words text-sm font-semibold">{title}</span>
+                        {meta.length > 0 ? (
+                          <span className="break-words text-xs text-ink-muted">
+                            {meta.join(' · ')}
+                          </span>
+                        ) : null}
                       </span>
-                      {meta.length > 0 ? (
-                        <span className="text-xs break-words text-ink-muted">
-                          {meta.join(' · ')}
-                        </span>
-                      ) : null}
-                    </span>
-                    <span className="shrink-0 text-[13px] text-ink-muted">
-                      {slot.status === 'closed' ? 'Closed' : peopleLabel(slot.capacity)}
-                    </span>
-                  </li>
-                );
-              })}
-            </ul>
-          );
-          if (!groupField) return <div key={group.key}>{rows}</div>;
-          const count = group.slots.length;
-          return (
-            <details key={group.key} open={showAll || fold?.open} className="group">
-              <summary className="flex min-h-9 cursor-pointer list-none items-center gap-2 text-sm font-bold [&::-webkit-details-marker]:hidden">
-                <ChevronRight
-                  size={14}
-                  strokeWidth={2.4}
-                  aria-hidden="true"
-                  className="shrink-0 transition-transform group-open:rotate-90"
-                />
-                <span className="min-w-0 break-words">{group.label}</span>
-                <span className="shrink-0 font-normal text-ink-muted">
-                  · {count === 1 ? '1 slot' : `${count} slots`}
-                </span>
-              </summary>
-              <div className="pt-2">{rows}</div>
-            </details>
-          );
-        })}
-        {!showAll && plan.hiddenCount > 0 ? (
-          <Link
-            href={`/app/signups/${signupId}?all=1#slots`}
-            scroll={false}
-            className="inline-flex h-9 items-center self-start rounded-lg border border-surface-sunk bg-white px-3.5 text-[13px] font-medium text-ink transition hover:bg-surface-raised"
-          >
-            Show all {plan.total} slots
-          </Link>
-        ) : null}
-      </div>
+                      <span className="shrink-0 text-[13px] text-ink-muted">
+                        {slot.status === 'closed' ? 'Closed' : peopleLabel(slot.capacity)}
+                      </span>
+                    </ReviewSlotRow>
+                  );
+                })}
+              </ul>
+            );
+            if (!groupField) return <div key={group.key}>{rows}</div>;
+            const count = group.slots.length;
+            return (
+              <details key={group.key} open={showAll || fold?.open} className="group">
+                <summary className="flex min-h-9 cursor-pointer list-none items-center gap-2 text-sm font-bold [&::-webkit-details-marker]:hidden">
+                  <ChevronRight
+                    size={14}
+                    strokeWidth={2.4}
+                    aria-hidden="true"
+                    className="shrink-0 transition-transform group-open:rotate-90"
+                  />
+                  <span className="min-w-0 break-words">{group.label}</span>
+                  <span className="shrink-0 font-normal text-ink-muted">
+                    · {count === 1 ? '1 slot' : `${count} slots`}
+                  </span>
+                </summary>
+                <div className="pt-2">{rows}</div>
+              </details>
+            );
+          })}
+          {!showAll && plan.hiddenCount > 0 ? (
+            <Link
+              href={`/app/signups/${signupId}?all=1#slots`}
+              scroll={false}
+              className="inline-flex h-9 items-center self-start rounded-lg border border-surface-sunk bg-white px-3.5 text-[13px] font-medium text-ink transition hover:bg-surface-raised"
+            >
+              Show all {plan.total} slots
+            </Link>
+          ) : null}
+        </div>
+      </ReviewSlotEditing>
       <p className="text-[13px] leading-relaxed text-ink-muted">
         Need something else, like another field or a different grouping?{' '}
         <Link href={builderHref} className="font-medium text-brand hover:underline">

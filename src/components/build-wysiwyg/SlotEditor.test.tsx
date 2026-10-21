@@ -124,6 +124,51 @@ describe('SlotEditor', () => {
     expect(onDuplicate).toHaveBeenCalled();
   });
 
+  // The review page's editor: it saves on Done, so it has Cancel, and slots
+  // are added and removed in the builder.
+  it('leaves out Duplicate and Delete without their handlers, and offers Cancel with one', () => {
+    const onCancel = vi.fn<() => void>();
+    const onClose = vi.fn<() => void>();
+    const { rerender } = render(
+      <SlotEditor
+        row={makeRow()}
+        fields={[makeField()]}
+        onCellChange={vi.fn()}
+        onCapacity={vi.fn()}
+        onAddEnumOption={vi.fn()}
+        onClose={onClose}
+        onCancel={onCancel}
+      />,
+    );
+    expect(screen.queryByRole('button', { name: /Duplicate/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /Delete/ })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(onCancel).toHaveBeenCalledOnce();
+
+    rerender(
+      <SlotEditor
+        row={makeRow()}
+        fields={[makeField()]}
+        onCellChange={vi.fn()}
+        onCapacity={vi.fn()}
+        onAddEnumOption={vi.fn()}
+        onClose={onClose}
+        onCancel={onCancel}
+        saving
+      />,
+    );
+    const saving = screen.getByRole('button', { name: /Saving/ }) as HTMLButtonElement;
+    expect(saving.disabled).toBe(true);
+    expect((screen.getByRole('button', { name: 'Cancel' }) as HTMLButtonElement).disabled).toBe(
+      true,
+    );
+  });
+
+  it('has no Cancel in the builder, which saves as it goes', () => {
+    renderEditor();
+    expect(screen.queryByRole('button', { name: 'Cancel' })).toBeNull();
+  });
+
   it('renders native input types for date / time / number fields', () => {
     renderEditor({
       fields: [

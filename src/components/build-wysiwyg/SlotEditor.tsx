@@ -16,9 +16,19 @@ type SlotEditorProps = {
    * cell value so the field-config PATCH always lands first.
    */
   onAddEnumOption: (fieldId: string, value: string) => void | Promise<void>;
-  onDuplicate: () => void;
-  onDelete: () => void;
+  /** Without it, there is no Duplicate button (the review page has none). */
+  onDuplicate?: () => void;
+  /** Without it, there is no Delete button (the review page has none). */
+  onDelete?: () => void;
+  /** Done: the builder closes the slot; the review page saves it first. */
   onClose: () => void;
+  /**
+   * Where the editor saves only on Done (the review page), Cancel throws the
+   * changes away. The builder saves as it goes, so it has none.
+   */
+  onCancel?: () => void;
+  /** Done is saving: it says so, and neither button can be pressed again. */
+  saving?: boolean;
 };
 
 /**
@@ -35,6 +45,8 @@ export function SlotEditor({
   onDuplicate,
   onDelete,
   onClose,
+  onCancel,
+  saving = false,
 }: SlotEditorProps) {
   return (
     <div className="px-3.5 pb-3.5 pt-3" data-testid={`slot-editor-${row.id}`}>
@@ -43,29 +55,44 @@ export function SlotEditor({
           Editing slot
         </span>
         <div className="flex gap-1">
-          <button
-            type="button"
-            onClick={onDuplicate}
-            className="inline-flex items-center gap-1 rounded-md border-none bg-transparent px-1.5 py-1 text-[11px] font-medium text-ink-muted hover:bg-surface-raised hover:text-ink"
-          >
-            <Copy size={11} />
-            Duplicate
-          </button>
-          <button
-            type="button"
-            onClick={onDelete}
-            className="inline-flex items-center gap-1 rounded-md border-none bg-transparent px-1.5 py-1 text-[11px] font-medium text-danger hover:bg-danger/10"
-          >
-            <Trash2 size={11} />
-            Delete
-          </button>
+          {onDuplicate ? (
+            <button
+              type="button"
+              onClick={onDuplicate}
+              className="inline-flex items-center gap-1 rounded-md border-none bg-transparent px-1.5 py-1 text-[11px] font-medium text-ink-muted hover:bg-surface-raised hover:text-ink"
+            >
+              <Copy size={11} />
+              Duplicate
+            </button>
+          ) : null}
+          {onDelete ? (
+            <button
+              type="button"
+              onClick={onDelete}
+              className="inline-flex items-center gap-1 rounded-md border-none bg-transparent px-1.5 py-1 text-[11px] font-medium text-danger hover:bg-danger/10"
+            >
+              <Trash2 size={11} />
+              Delete
+            </button>
+          ) : null}
+          {onCancel ? (
+            <button
+              type="button"
+              onClick={onCancel}
+              disabled={saving}
+              className="inline-flex items-center rounded-md border-none bg-transparent px-1.5 py-1 text-[11px] font-medium text-ink-muted hover:bg-surface-raised hover:text-ink disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              Cancel
+            </button>
+          ) : null}
           <button
             type="button"
             onClick={onClose}
-            className="inline-flex items-center gap-1 rounded-md border-none bg-transparent px-1.5 py-1 text-[11px] font-medium text-brand hover:bg-brand-soft"
+            disabled={saving}
+            className="inline-flex items-center gap-1 rounded-md border-none bg-transparent px-1.5 py-1 text-[11px] font-medium text-brand hover:bg-brand-soft disabled:cursor-not-allowed disabled:opacity-60"
           >
             <Check size={11} />
-            Done
+            {saving ? 'Saving\u2026' : 'Done'}
           </button>
         </div>
       </div>

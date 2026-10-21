@@ -81,7 +81,7 @@ outside any transaction, and a failed write never fails the request.
 | event | actor | payload | fired from |
 |---|---|---|---|
 | `slot.created` | organizer | `{ slotId }` from `addSlot`; `{ count, bulk: true, slotIds, beforeSlotId? }` from `addSlotsBulk` (the bulk endpoint and the `add_slots` tool), one row per call | `services/slots.ts` |
-| `slot.updated` | organizer | `{ slotId, changed }` (the keys the update sent) | `services/slots.ts` |
+| `slot.updated` | organizer | `{ slotId, changed }` (the keys the update sent). A slot changed on the review page goes through the same route as one changed in the Build tab, so the payload doesn't say which page it came from | `services/slots.ts` |
 | `slot.reordered` | organizer | `{ slotIds }` (every slot, in the new order; written even when the order did not change) | `services/slots.ts` (`reorderSlots`, from the `reorder_slots` tool; a drag in the Build tab writes a `slot.updated` per moved slot instead) |
 | `slot.deleted` | organizer | `{ slotId, commitmentsRemoved, places }` (the sign-ups deleted with it, as commitments and as places) | `services/slots.ts` |
 | `slot.merged` | organizer | `{ slotId, mergedSlotIds, capacity }`: copies of a slot on a draft made into one, the review page's fix for identical rows. `slotId` is the slot kept, `mergedSlotIds` the ones deleted, and `capacity` the kept slot's new capacity, their total (`null` when any had no limit). Drafts only, and never a slot anyone has signed up for | `services/slot-merge.ts` (`mergeSlots`) |

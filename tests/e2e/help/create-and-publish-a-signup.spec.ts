@@ -137,7 +137,7 @@ test.describe('help: create and publish your first signup', () => {
     // Change opens the card's form, with Save; Cancel closes it.
     await signUpCard.getByRole('button', { name: new RegExp(`^${UI.change}`) }).click();
     await expect(signUpCard.getByRole('button', { name: UI.save })).toBeVisible();
-    await signUpCard.getByRole('button', { name: 'Cancel' }).click();
+    await signUpCard.getByRole('button', { name: UI.cancel }).click();
     await page.getByRole('link', { name: UI.editInBuilder }).click();
     await page.waitForURL(/\/build$/);
 
@@ -315,6 +315,65 @@ test.describe('help: create and publish your first signup', () => {
     // "For other problems, choose Fix in the builder."
     await tbd.getByRole('link', { name: UI.fixInBuilder }).click();
     await page.waitForURL(/\/build$/);
+  });
+
+  test('a slot can be changed on the review page', async ({ page, context, isMobile }) => {
+    test.skip(isMobile, 'the same steps on a phone');
+    await loginAsSeededOrganizer(context);
+    const created = await page.request.post('/api/signups', {
+      data: {
+        title: `Review slots ${Date.now()}`,
+        description: '',
+        tags: [],
+        visibility: 'unlisted',
+        settings: {},
+      },
+    });
+    expect(created.ok()).toBe(true);
+    const id = (await created.json()).data.id as string;
+    for (const slot of [
+      { values: { what: 'Fruit and water', date: '2030-04-06' }, capacity: 2 },
+      { values: { what: 'Napkins', date: '2030-04-13' }, capacity: 2 },
+    ]) {
+      const added = await page.request.post(`/api/signups/${id}/slots`, { data: slot });
+      expect(added.ok()).toBe(true);
+    }
+
+    await page.goto(`/app/signups/${id}`);
+    await expect(page.getByRole('heading', { name: UI.reviewHeading })).toBeVisible();
+    const editor = page.locator('[data-testid^="slot-editor-"]');
+
+    // "To change a slot, choose it."
+    const fruit = page.getByRole('button', { name: /^Edit slot — Fruit and water/ });
+    await expect(fruit).toContainText('2 people');
+    await fruit.click();
+    await expect(fruit).toHaveAttribute('aria-expanded', 'true');
+    await expect(editor).toHaveCount(1);
+    // Slots are added and removed in the builder, so this editor can't.
+    await expect(editor.getByRole('button', { name: UI.duplicate })).toHaveCount(0);
+    await expect(editor.getByRole('button', { name: UI.delete })).toHaveCount(0);
+
+    // "Change what you need, like its date or its Capacity, then choose Done
+    // to save it."
+    await editor.getByRole('spinbutton', { name: UI.capacity }).fill('3');
+    await editor.getByRole('button', { name: UI.done }).click();
+    await expect(editor).toHaveCount(0);
+    await expect(page.getByRole('status').filter({ hasText: UI.saved })).toBeVisible();
+    await expect(fruit).toContainText('3 people');
+    await expect(fruit).toBeFocused();
+    // Saved, not only shown.
+    await page.reload();
+    await expect(fruit).toContainText('3 people');
+
+    // "To close it without saving, choose Cancel."
+    const napkins = page.getByRole('button', { name: /^Edit slot — Napkins/ });
+    await napkins.click();
+    await editor.getByRole('textbox', { name: `${UI.what} value` }).fill('Cups');
+    await editor.getByRole('button', { name: UI.cancel }).click();
+    await expect(editor).toHaveCount(0);
+    await page.reload();
+    await expect(napkins).toBeVisible();
+    await expect(page.getByRole('button', { name: /^Edit slot — Cups/ })).toHaveCount(0);
   });
 
   test('copies of a slot can be merged into one on the review page, and undone', async ({

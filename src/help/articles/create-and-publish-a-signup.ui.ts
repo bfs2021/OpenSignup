@@ -38,6 +38,8 @@ export const UI = {
   fixInBuilder: 'Fix in the builder',
   // Each of its cards' button; the test finds it by its card.
   change: 'Change',
+  // Closes a card's form, or a slot opened on that page, without saving.
+  cancel: 'Cancel',
   editInBuilder: 'Edit everything in the builder',
   publishFromReview: 'Publish and get the link',
   // Under those two: sends the email about an unpublished draft now.
