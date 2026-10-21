@@ -2,16 +2,29 @@ import { Text } from '@react-email/components';
 import { formatDuration } from '@/lib/format-duration';
 import { EmailButton, EmailHeading, EmailIntro, EmailLayout } from './layout';
 
-export interface MagicLinkEmailProps {
+interface MagicLinkEmailBaseProps {
   url: string;
   email: string;
   expiresInMinutes: number;
-  codeExpiresInMinutes?: number;
-  /** Six-digit code that can be typed into the window that requested the link. */
-  code?: string;
 }
 
-export function MagicLinkEmail({ url, email, expiresInMinutes, codeExpiresInMinutes = expiresInMinutes, code }: MagicLinkEmailProps) {
+export type MagicLinkEmailProps = MagicLinkEmailBaseProps &
+  (
+    | {
+        /** Six-digit code that can be typed into the window that requested the link. */
+        code: string;
+        codeExpiresInMinutes: number;
+      }
+    | { code?: undefined; codeExpiresInMinutes?: number }
+  );
+
+export function MagicLinkEmail({
+  url,
+  email,
+  expiresInMinutes,
+  codeExpiresInMinutes = expiresInMinutes,
+  code,
+}: MagicLinkEmailProps) {
   return (
     <EmailLayout preview={`Sign in to OpenSignup as ${email}`}>
       <EmailHeading>Sign in to OpenSignup</EmailHeading>
