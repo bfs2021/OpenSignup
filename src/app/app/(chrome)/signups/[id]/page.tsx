@@ -1,5 +1,6 @@
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
+import { after } from 'next/server';
 import { requireOrganizerSession, toActor } from '@/auth/session';
 import { ReviewDetailsCard } from '@/components/review/ReviewDetailsCard';
 import { ReviewSignUpCard } from '@/components/review/ReviewSignUpCard';
@@ -7,8 +8,10 @@ import { ReviewSlotsCard } from '@/components/review/ReviewSlotsCard';
 import { SignupLoadError } from '@/components/signup/SignupLoadError';
 import { StatusPill } from '@/components/status-pill';
 import { AsyncSubmitButton } from '@/components/ui/async-submit-button';
-import { hasFilledSlot, reminderReach, whatHappensOnSignUp } from '@/lib/signup-summary';
-import { trackOrganizerView } from '@/lib/view-tracker';
+import { checkDraft } from '@/lib/draft-checks';
+import { noticeText } from '@/lib/draft-notices';
+import { groupByRef, hasFilledSlot, reminderReach, whatHappensOnSignUp } from '@/lib/signup-summary';
+import { recordNoticesShown, trackOrganizerView } from '@/lib/view-tracker';
 import {
   DESCRIPTION_MAX_LENGTH,
   REMINDER_BEFORE,
@@ -57,13 +60,33 @@ export default async function SignupPage({ params, searchParams }: PageProps) {
     redirect(builderHref);
   }
 
+  // Every slot is checked, not only the ones the fold shows.
+  const groupRef = groupByRef(sig.settings);
+  const found = checkDraft({
+    fields: sig.fields,
+    slots,
+    settings: { groupByFieldRefs: groupRef ? [groupRef] : [] },
+  });
+  const notices = found.map((n) => noticeText(n, { fields: sig.fields, slots }));
+
+  const actor = { actorId: session.organizerId, actorType: 'organizer' } as const;
   await trackOrganizerView({
-    actor: { actorId: session.organizerId, actorType: 'organizer' },
+    actor,
     signupId: sig.id,
     workspaceId: sig.workspaceId,
     eventType: 'signup.editor_opened',
     payload: { section: 'review' },
   });
+  if (found.length > 0) {
+    after(() =>
+      recordNoticesShown({
+        actor,
+        signupId: sig.id,
+        workspaceId: sig.workspaceId,
+        kinds: found.map((n) => n.kind),
+      }),
+    );
+  }
 
   // Both read malformed settings as their defaults rather than failing.
   const requireEmail = requiresEmail(sig.settings);
@@ -111,6 +134,7 @@ export default async function SignupPage({ params, searchParams }: PageProps) {
           settings={sig.settings}
           showAll={all === '1'}
           builderHref={builderHref}
+          notices={notices}
         />
         <ReviewSignUpCard
           signupId={id}

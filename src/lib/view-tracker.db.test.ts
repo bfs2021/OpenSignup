@@ -11,6 +11,7 @@ import {
   recordEditLinkFollowed,
   recordLandingCtaClicked,
   recordLandingView,
+  recordNoticesShown,
   recordOrganizerView,
   recordPublicView,
   type RequestSignals,
@@ -443,6 +444,25 @@ describe('view-tracker (db)', () => {
       expect(rows.length).toBeGreaterThanOrEqual(1);
       expect(rows[0]!.signupId).toBeNull();
       expect(rows[0]!.payload).toEqual({ mode: 'manual', device: 'phone' });
+    });
+  });
+
+  describe('recordNoticesShown', () => {
+    it('writes one review.notice_shown per kind, holding only the kind', async () => {
+      await recordNoticesShown({
+        actor: { actorId: organizerId, actorType: 'organizer' },
+        signupId,
+        workspaceId,
+        kinds: ['placeholder', 'empty_field', 'empty_field'],
+      });
+      const rows = await db
+        .select()
+        .from(activity)
+        .where(and(eq(activity.signupId, signupId), eq(activity.eventType, 'review.notice_shown')));
+      expect(rows.map((r) => r.payload).sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)))).toEqual([
+        { kind: 'empty_field' },
+        { kind: 'placeholder' },
+      ]);
     });
   });
 });

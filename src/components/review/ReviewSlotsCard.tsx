@@ -13,9 +13,11 @@ import {
   sharedValues,
   signupHeadline,
 } from '@/lib/signup-summary';
+import type { NoticeText } from '@/lib/draft-notices';
 import type { SlotFieldDefinition } from '@/schemas/slot-fields';
 import { AiDraftWarnings } from './AiDraftWarnings';
 import { ReviewCard } from './ReviewCard';
+import { ReviewNotices } from './ReviewNotices';
 
 interface ReviewSlot {
   id: string;
@@ -38,6 +40,7 @@ export function ReviewSlotsCard({
   settings,
   showAll,
   builderHref,
+  notices,
 }: {
   signupId: string;
   fields: SlotFieldDefinition[];
@@ -45,6 +48,8 @@ export function ReviewSlotsCard({
   settings: unknown;
   showAll: boolean;
   builderHref: string;
+  /** What `checkDraft` found, in words, over every slot. */
+  notices: NoticeText[];
 }) {
   const summary = { fields, slots, settings };
   const groupRef = groupByRef(settings);
@@ -60,7 +65,11 @@ export function ReviewSlotsCard({
   );
 
   return (
-    <ReviewCard heading="What people sign up for" headingId="review-slots">
+    <ReviewCard
+      heading="What people sign up for"
+      headingId="review-slots"
+      attention={notices.length > 0}
+    >
       <p className="text-base font-semibold">{signupHeadline(summary)}</p>
       {shared.length > 0 ? (
         <p className="text-sm text-ink-muted">
@@ -68,6 +77,7 @@ export function ReviewSlotsCard({
         </p>
       ) : null}
       <AiDraftWarnings signupId={signupId} />
+      <ReviewNotices notices={notices} builderHref={builderHref} />
       <div id="slots" className="flex scroll-mt-4 flex-col gap-3.5 pt-1">
         {groups.map((group, i) => {
           const fold = plan.groups[i];

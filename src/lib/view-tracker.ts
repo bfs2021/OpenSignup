@@ -190,3 +190,26 @@ export async function trackOrganizerView(
   const signals = readRequestSignals(await headers());
   after(() => recordOrganizerView({ ...args, signals }));
 }
+
+/**
+ * The review page showing an organizer the problems it found in their draft:
+ * one row per kind of notice, so "shown" can be set against "accepted" by
+ * kind. The kind only, never the values it's about. Best effort, as page
+ * views are; the page runs it after it has been sent.
+ */
+export async function recordNoticesShown(args: {
+  actor: ActivityActor;
+  signupId: string;
+  workspaceId: string | null;
+  kinds: readonly string[];
+}): Promise<void> {
+  for (const kind of new Set(args.kinds)) {
+    await recordActivityBestEffort(getDb(), {
+      actor: args.actor,
+      signupId: args.signupId,
+      workspaceId: args.workspaceId,
+      eventType: 'review.notice_shown',
+      payload: { kind },
+    });
+  }
+}

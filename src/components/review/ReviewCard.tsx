@@ -2,14 +2,16 @@ import type { ReactNode } from 'react';
 import { Check, Pencil } from 'lucide-react';
 
 /**
- * One card of the review page: a round mark on the left (a check, or a
- * pencil while its Change form is open), its heading, and what it holds.
+ * One card of the review page: a round mark on the left (a check; a pencil
+ * while its Change form is open; "!" while it has something to fix), its
+ * heading, and what it holds.
  * No hooks, so the server cards and the client ones share it.
  */
 export function ReviewCard({
   heading,
   headingId,
   editing = false,
+  attention = false,
   aside,
   action,
   children,
@@ -17,6 +19,8 @@ export function ReviewCard({
   heading: string;
   headingId: string;
   editing?: boolean;
+  /** Something on the card needs fixing before the signup is published. */
+  attention?: boolean;
   /** Next to the heading, such as "Saved". */
   aside?: ReactNode;
   /** Top right, such as the Change button. */
@@ -33,10 +37,14 @@ export function ReviewCard({
       <span
         aria-hidden="true"
         className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full ${
-          editing ? 'bg-brand-soft text-brand' : 'bg-success/10 text-success'
+          editing
+            ? 'bg-brand-soft text-brand'
+            : attention
+              ? 'bg-warn/10 text-[15px] font-bold text-warn'
+              : 'bg-success/10 text-success'
         }`}
       >
-        {editing ? <Pencil size={13} /> : <Check size={15} strokeWidth={3} />}
+        {editing ? <Pencil size={13} /> : attention ? '!' : <Check size={15} strokeWidth={3} />}
       </span>
       <div className="flex min-w-0 flex-1 flex-col gap-2">
         <div className="flex min-h-7 items-center gap-2.5">

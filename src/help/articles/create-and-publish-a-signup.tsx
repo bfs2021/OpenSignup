@@ -134,6 +134,10 @@ export function CreateAndPublishASignup() {
               in it, the draft opens on <Ui>{UI.reviewHeading}</Ui>. It shows your slots the way
               people will see them.
             </p>
+            <p>
+              If something needs fixing first, the page says so above your slots. A slot that still
+              says TBD is one example.
+            </p>
             <Screenshot
               src="/help/create-and-publish-a-signup/check-your-signup.png"
               alt="Check your signup, then share it, with the signup's name, its two slots and what happens when someone signs up."
