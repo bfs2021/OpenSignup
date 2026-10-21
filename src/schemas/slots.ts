@@ -52,8 +52,8 @@ export const SlotUpdateInputSchema = z
   .strict();
 export type SlotUpdateInput = z.infer<typeof SlotUpdateInputSchema>;
 
-// One merge takes in at most as many slots as one bulk add makes.
-const MAX_MERGE_SLOTS = 500;
+/** The most slots one merge takes in: as many as one bulk add makes. */
+export const MAX_MERGE_SLOTS = 500;
 
 const CapacitySchema = z.number().int().positive().nullable();
 

@@ -186,15 +186,55 @@ describe('noticeView', () => {
   it('leaves the other kinds to the builder', () => {
     const shown = views(
       [what],
-      [slot('a', { what: 'TBD' }), slot('b', { what: 'Setup' }), slot('c', { what: 'Setup' }), slot('d', { what: '9am' })],
+      [slot('a', { what: 'TBD' }), slot('b', { what: 'Setup' }), slot('d', { what: '9am' })],
     );
-    expect(shown.map((v) => v.kind)).toEqual(['placeholder', 'duplicate_slots', 'time_in_text']);
+    expect(shown.map((v) => v.kind)).toEqual(['placeholder', 'time_in_text']);
     expect(shown.every((v) => v.fix === undefined)).toBe(true);
-    expect(shown.map((v) => v.key)).toEqual([
-      'placeholder:a',
-      'duplicate_slots:b',
-      'time_in_text:f_what',
-    ]);
+    expect(shown.map((v) => v.key)).toEqual(['placeholder:a', 'time_in_text:f_what']);
+  });
+
+  it('offers to merge copies, naming them by their values', () => {
+    const [copies] = views(
+      [what, date],
+      [
+        slot('a', { what: 'Setup', date: '2030-11-14' }),
+        slot('b', { what: 'Setup', date: '2030-11-14' }),
+        slot('c', { what: 'Till', date: '2030-11-15' }),
+      ],
+    );
+    expect(copies).toMatchObject({
+      kind: 'duplicate_slots',
+      key: 'duplicate_slots:a',
+      fix: {
+        type: 'button',
+        label: 'Merge into one slot',
+        name: 'Merge into one slot: “Setup · Thu, Nov 14”',
+        request: { kind: 'duplicate_slots', slotIds: ['a', 'b'] },
+      },
+    });
+  });
+
+  it('offers the same button for numbered rows, named by what they share', () => {
+    const [numbered] = views(
+      [what],
+      [slot('a', { what: 'Helper 1' }), slot('b', { what: 'Helper 2' }), slot('c', { what: 'Setup' })],
+    );
+    expect(numbered?.text).toBe(
+      '2 slots differ only by a number, like “Helper 1” and “Helper 2”. If they’re the same job, one slot for 2 people does it.',
+    );
+    expect(numbered?.fix).toEqual({
+      type: 'button',
+      label: 'Merge into one slot',
+      name: 'Merge into one slot: “Helper”',
+      request: { kind: 'duplicate_slots', slotIds: ['a', 'b'] },
+    });
+  });
+
+  it('leaves more copies than one merge takes to the builder', () => {
+    const many = Array.from({ length: 501 }, (_, i) => slot(`s${i}`, { what: 'Setup' }));
+    const [copies] = views([what], many);
+    expect(copies?.kind).toBe('duplicate_slots');
+    expect(copies?.fix).toBeUndefined();
   });
 
   it('keeps the words noticeText gives', () => {
@@ -222,6 +262,24 @@ describe('fixDoneText', () => {
     expect(fixDoneText({ kind: 'ungrouped_dates', fieldId: 'f_date', ref: 'date' }, ctx)).toBe(
       'Grouped the slots by “Date”.',
     );
+  });
+
+  it('says how many slots a merge made into one, and its places', () => {
+    const merge = (n: number, capacity: number | null, numbered = false) =>
+      fixDoneText(
+        {
+          kind: 'duplicate_slots',
+          slotIds: Array.from({ length: n }, (_, i) => `s${i}`),
+          keepSlotId: 's0',
+          capacity,
+          values: { what: 'Helper' },
+          numbered,
+        },
+        ctx,
+      );
+    expect(merge(3, 3)).toBe('Merged 3 slots into one for 3 people.');
+    expect(merge(2, null)).toBe('Merged 2 slots into one with no limit.');
+    expect(merge(4, 4, true)).toBe('Merged 4 slots into one for 4 people.');
   });
 
   it('never prints empty quotes for a field with no name', () => {

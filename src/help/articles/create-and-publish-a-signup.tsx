@@ -143,7 +143,9 @@ export function CreateAndPublishASignup() {
             </p>
             <p>
               Some problems have a button that fixes them right there. For a slot with nothing in
-              it, choose <Ui>{UI.removeBlankSlot}</Ui>. Right after a fix, you can choose{' '}
+              it, choose <Ui>{UI.removeBlankSlot}</Ui>. For slots that are copies of each other,
+              choose <Ui>{UI.mergeCopies}</Ui>: one slot takes all their spots. Right after a fix,
+              you can choose{' '}
               <Ui>{UI.undo}</Ui> to put it back. For other problems, choose{' '}
               <Ui>{UI.fixInBuilder}</Ui>.
             </p>

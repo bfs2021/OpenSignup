@@ -317,6 +317,52 @@ test.describe('help: create and publish your first signup', () => {
     await page.waitForURL(/\/build$/);
   });
 
+  test('copies of a slot can be merged into one on the review page, and undone', async ({
+    page,
+    context,
+    isMobile,
+  }) => {
+    test.skip(isMobile, 'the same steps on a phone');
+    await loginAsSeededOrganizer(context);
+    const created = await page.request.post('/api/signups', {
+      data: {
+        title: `Review merge ${Date.now()}`,
+        description: '',
+        tags: [],
+        visibility: 'unlisted',
+        settings: {},
+      },
+    });
+    expect(created.ok()).toBe(true);
+    const id = (await created.json()).data.id as string;
+    // Two slots the same, each for two families.
+    for (let i = 0; i < 2; i++) {
+      const added = await page.request.post(`/api/signups/${id}/slots`, {
+        data: { values: { what: 'Fruit and water', date: '2030-04-06' }, capacity: 2 },
+      });
+      expect(added.ok()).toBe(true);
+    }
+
+    await page.goto(`/app/signups/${id}`);
+    const notices = page.getByRole('region', { name: /to fix before you publish/ });
+    const copies = notices.getByRole('listitem').filter({ hasText: 'slots are the same' });
+    const rows = page.getByText('Fruit and water', { exact: true });
+    await expect(copies).toBeVisible();
+    await expect(rows).toHaveCount(2);
+
+    // "For slots that are copies of each other, choose Merge into one slot:
+    // one slot takes all their spots."
+    await copies.getByRole('button', { name: UI.mergeCopies }).click();
+    await expect(page.getByText('Merged 2 slots into one for 4 people.')).toBeVisible();
+    await expect(copies).toHaveCount(0);
+    await expect(rows).toHaveCount(1);
+
+    await page.getByRole('button', { name: UI.undo, exact: true }).click();
+    await expect(page.getByText('Undone.')).toBeVisible();
+    await expect(copies).toBeVisible();
+    await expect(rows).toHaveCount(2);
+  });
+
   test('people can sign up without an email', async ({ page, context, browser, isMobile }) => {
     test.skip(isMobile, 'the same steps on a phone; the desktop run takes the picture');
     await loginAsSeededOrganizer(context);

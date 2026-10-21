@@ -6,6 +6,7 @@ import {
   draftInputOf,
   findNoticeFor,
   labelProblem,
+  mergeRequestFor,
   planUndo,
   type DraftState,
   type FixableNotice,
@@ -22,16 +23,18 @@ import {
   type DraftFixKind,
   type DraftFixUndo,
 } from '@/schemas/draft-fixes';
+import type { SlotUnmergeInput } from '@/schemas/slots';
 import { getSignupForOrganizer, updateSignup } from './signups';
 import { addField, deleteField, updateField } from './slot-fields';
+import { mergeSlots, unmergeSlots } from './slot-merge';
 import { addSlotsBulk, deleteSlot, updateSlot } from './slots';
 
 /**
  * The review page's one-tap fixes and their Undo (issue #503). Each fix and
- * each undo is made by the services the builder and the AI connector use, so
- * it is checked, locked and logged as theirs are; this only decides which of
- * them to call. Drafts only: anything else is refused with `conflict` and
- * `details.reason: 'not_draft'`.
+ * each undo is made by the services the builder and the AI connector use, or,
+ * for copies, by `mergeSlots` and `unmergeSlots`, so it is checked, locked and
+ * logged as theirs are; this only decides which of them to call. Drafts only:
+ * anything else is refused with `conflict` and `details.reason: 'not_draft'`.
  */
 
 export interface AppliedDraftFix {
@@ -44,6 +47,27 @@ export interface AppliedDraftFix {
 
 function conflict(reason: 'not_draft' | 'stale' | 'changed', message: string): ServiceError {
   return serviceError('conflict', message, { details: { reason } });
+}
+
+/**
+ * A refusal from `mergeSlots` or `unmergeSlots` in the words the page uses
+ * for the others. Both check under their locks what the checks here read
+ * without them, so a refusal means the signup changed in between: published
+ * (its status), or, for a merge, a copy deleted, closed or no longer
+ * accepted; for an undo, the kept slot deleted or its capacity changed. A
+ * value an undo can't put back (a field deleted since) stays as it is.
+ */
+function fromMerge(error: ServiceError, step: 'fix' | 'undo'): ServiceError {
+  if (error.code === 'conflict' && error.field === 'status') {
+    return conflict('not_draft', error.message);
+  }
+  if (step === 'undo') {
+    return error.code === 'conflict' ? conflict('changed', error.message) : error;
+  }
+  // Not a total too big for one slot, which no change could have caused.
+  const changed =
+    (error.code === 'conflict' && error.field !== 'capacity') || error.code === 'invalid_input';
+  return changed ? conflict('stale', error.message) : error;
 }
 
 /** The signup, fresh, for someone who may change it, while it's a draft. */
@@ -122,9 +146,9 @@ export async function applyDraftFix(
     label = request.label.trim();
   }
 
-  const fixed = await fix(db, actor, signupId, found, label);
+  const fixed = await fix(db, actor, signupId, found, label, state);
   if (!fixed.ok) return fixed;
-  const notice = fixed.value;
+  const { notice, unmerge } = fixed.value;
 
   await recordActivityBestEffort(db, {
     signupId,
@@ -135,23 +159,27 @@ export async function applyDraftFix(
   });
   return ok({
     kind: notice.kind,
-    undo: buildUndo(notice, state, label),
+    undo: buildUndo(notice, state, label, unmerge),
     done: fixDoneText(notice, { fields: state.fields, slots: state.slots }, label),
   });
 }
 
-/** Makes the fix; returns the notice as far as it was fixed. */
+/**
+ * Makes the fix. Returns the notice as far as it was fixed, and for a merge
+ * the undo `mergeSlots` gave back.
+ */
 async function fix(
   db: Db,
   actor: Actor,
   signupId: string,
   notice: FixableNotice,
   label: string,
-): Promise<Result<FixableNotice, ServiceError>> {
+  before: DraftState,
+): Promise<Result<{ notice: FixableNotice; unmerge?: SlotUnmergeInput }, ServiceError>> {
   switch (notice.kind) {
     case 'empty_field': {
       const r = await deleteField(db, actor, notice.fieldId);
-      return r.ok ? ok(notice) : r;
+      return r.ok ? ok({ notice }) : r;
     }
     case 'blank_slot': {
       // One at a time, each in its own transaction, as the builder deletes
@@ -174,17 +202,24 @@ async function fix(
           refused && refused.code !== 'not_found' ? refused : conflict('stale', 'no slot to remove'),
         );
       }
-      return ok({ ...notice, slotIds: removed });
+      return ok({ notice: { ...notice, slotIds: removed } });
     }
     case 'unnamed_field': {
       const r = await updateField(db, actor, notice.fieldId, { label });
-      return r.ok ? ok(notice) : r;
+      return r.ok ? ok({ notice }) : r;
     }
     case 'ungrouped_dates': {
       const r = await updateSignup(db, actor, signupId, {
         settings: { groupByFieldRefs: [notice.ref] },
       });
-      return r.ok ? ok(notice) : r;
+      return r.ok ? ok({ notice }) : r;
+    }
+    case 'duplicate_slots': {
+      // All or nothing, in one transaction, the total worked out from the
+      // rows as locked.
+      const r = await mergeSlots(db, actor, signupId, mergeRequestFor(notice, before));
+      if (!r.ok) return err(fromMerge(r.error, 'fix'));
+      return ok({ notice: { ...notice, capacity: r.value.slot.capacity }, unmerge: r.value.undo });
     }
   }
 }
@@ -266,6 +301,10 @@ async function undo(
         settings: { groupByFieldRefs: plan.groupByFieldRefs },
       });
       return r.ok ? ok(null) : r;
+    }
+    case 'duplicate_slots': {
+      const r = await unmergeSlots(db, actor, signupId, plan.unmerge);
+      return r.ok ? ok(null) : err(fromMerge(r.error, 'undo'));
     }
   }
 }

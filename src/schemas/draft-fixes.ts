@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { SortOrderSchema } from './common';
 import { FIELD_TYPES, LABEL_MAX_LENGTH, SlotFieldConfigSchema } from './slot-fields';
-import { SLOTS_PER_BULK_ADD } from './slots';
+import { MAX_MERGE_SLOTS, SLOTS_PER_BULK_ADD, SlotUnmergeInputSchema } from './slots';
 
 const IdSchema = z.string().min(1).max(64);
 
@@ -26,6 +26,12 @@ export const DraftFixRequestSchema = z.discriminatedUnion('kind', [
     })
     .strict(),
   z.object({ kind: z.literal('ungrouped_dates'), fieldId: IdSchema }).strict(),
+  z
+    .object({
+      kind: z.literal('duplicate_slots'),
+      slotIds: z.array(IdSchema).min(2).max(MAX_MERGE_SLOTS),
+    })
+    .strict(),
 ]);
 export type DraftFixRequest = z.infer<typeof DraftFixRequestSchema>;
 
@@ -104,6 +110,13 @@ export const DraftFixUndoSchema = z.discriminatedUnion('kind', [
       ref: z.string().min(1).max(64),
       /** The grouping before, as stored. */
       previous: z.array(z.string().max(64)).max(1),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal('duplicate_slots'),
+      /** What `mergeSlots` returned, for `unmergeSlots`, as it is. */
+      unmerge: SlotUnmergeInputSchema,
     })
     .strict(),
 ]);

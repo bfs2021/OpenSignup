@@ -11,6 +11,7 @@
  */
 
 import type { DraftFixKind, DraftFixRequest, DraftFixUndo } from '@/schemas/draft-fixes';
+import type { SlotUnmergeInput } from '@/schemas/slots';
 import {
   LABEL_MAX_LENGTH,
   UNTITLED_FIELD_LABEL,
@@ -18,6 +19,7 @@ import {
 } from '@/schemas/slot-fields';
 import {
   findBlankSlots,
+  findDuplicateSlots,
   isEmpty,
   type DraftInput,
   type DraftNotice,
@@ -93,7 +95,10 @@ export function findNoticeFor(
   request: DraftFixRequest,
 ): FixableNotice | null {
   for (const notice of notices) {
-    if (notice.kind === 'blank_slot' && request.kind === 'blank_slot') {
+    if (
+      (notice.kind === 'blank_slot' && request.kind === 'blank_slot') ||
+      (notice.kind === 'duplicate_slots' && request.kind === 'duplicate_slots')
+    ) {
       if (sameIds(notice.slotIds, request.slotIds)) return notice;
     } else if (
       (notice.kind === 'empty_field' && request.kind === 'empty_field') ||
@@ -118,9 +123,37 @@ export function fixRequestFor(notice: DraftNotice): DraftFixRequest | null {
       return { kind: 'blank_slot', slotIds: notice.slotIds };
     case 'ungrouped_dates':
       return { kind: 'ungrouped_dates', fieldId: notice.fieldId };
+    case 'duplicate_slots':
+      return { kind: 'duplicate_slots', slotIds: notice.slotIds };
     default:
       return null;
   }
+}
+
+/** Whether two slots' values say the same thing, whatever order their keys are in. */
+function sameValues(a: Record<string, unknown>, b: Record<string, unknown>): boolean {
+  const keys = Object.keys(a);
+  return (
+    keys.length === Object.keys(b).length &&
+    keys.every((k) => Object.hasOwn(b, k) && JSON.stringify(a[k]) === JSON.stringify(b[k]))
+  );
+}
+
+/**
+ * What `mergeSlots` is asked for to merge a notice's copies: the slot it
+ * keeps, every copy, and the values the kept slot ends up with when they
+ * aren't the ones it has. Only numbered rows change them ("Helper 1" becomes
+ * "Helper"); identical rows keep the kept slot's own.
+ */
+export function mergeRequestFor(
+  notice: DraftNoticeOf<'duplicate_slots'>,
+  before: DraftState,
+): { keepSlotId: string; slotIds: string[]; values?: Record<string, unknown> } {
+  const kept = before.slots.find((s) => s.id === notice.keepSlotId);
+  const request = { keepSlotId: notice.keepSlotId, slotIds: notice.slotIds };
+  return kept && sameValues(kept.values, notice.values)
+    ? request
+    : { ...request, values: notice.values };
 }
 
 /**
@@ -137,9 +170,15 @@ export function labelProblem(label: string): 'blank' | 'too_long' | 'untitled' |
 
 /**
  * How to undo `notice`'s fix, from the signup as it was just before it.
- * `label` is the new name, for a field with no name.
+ * `label` is the new name, for a field with no name. A merge's undo is the one
+ * `mergeSlots` returned, `unmerge`, passed on as it is.
  */
-export function buildUndo(notice: FixableNotice, before: DraftState, label = ''): DraftFixUndo {
+export function buildUndo(
+  notice: FixableNotice,
+  before: DraftState,
+  label = '',
+  unmerge?: SlotUnmergeInput,
+): DraftFixUndo {
   const settings = storedSettings(before.settings);
   switch (notice.kind) {
     case 'empty_field': {
@@ -199,6 +238,9 @@ export function buildUndo(notice: FixableNotice, before: DraftState, label = '')
     }
     case 'ungrouped_dates':
       return { kind: 'ungrouped_dates', ref: notice.ref, previous: settings.groupByFieldRefs };
+    case 'duplicate_slots':
+      if (!unmerge) throw new Error('buildUndo: a merge is undone with what mergeSlots returned');
+      return { kind: 'duplicate_slots', unmerge };
   }
 }
 
@@ -219,7 +261,8 @@ export type UndoPlan =
       closed: number[];
     }
   | { kind: 'unnamed_field'; fieldId: string; label: string }
-  | { kind: 'ungrouped_dates'; groupByFieldRefs: string[] };
+  | { kind: 'ungrouped_dates'; groupByFieldRefs: string[] }
+  | { kind: 'duplicate_slots'; unmerge: SlotUnmergeInput };
 
 /** A name that was blank goes back as the builder's default: a field needs one. */
 export function restoredLabel(previous: string): string {
@@ -294,6 +337,29 @@ export function planUndo(undo: DraftFixUndo, now: DraftState): UndoPlan | null {
       const [only, ...rest] = settings.groupByFieldRefs;
       if (only !== undo.ref || rest.length > 0) return null;
       return { kind: 'ungrouped_dates', groupByFieldRefs: undo.previous };
+    }
+    case 'duplicate_slots': {
+      // `unmergeSlots` checks the first two again under its locks.
+      const { keepSlotId, previous, restored } = undo.unmerge;
+      const kept = now.slots.find((s) => s.id === keepSlotId);
+      if (!kept) return null;
+      const capacities = [previous.capacity, ...restored.map((r) => r.capacity)];
+      const merged = capacities.some((c) => c === null)
+        ? null
+        : capacities.reduce<number>((sum, c) => sum + (c ?? 0), 0);
+      if (kept.capacity !== merged) return null;
+      // An undo that already ran (its answer lost, say) gave the kept slot
+      // its own capacity back, so the check above refuses it again, except
+      // when that was no limit: the total is no limit too. Then the copies
+      // being back is what tells, and putting them back again would double
+      // them.
+      if (
+        previous.capacity === null &&
+        findDuplicateSlots(draftInputOf(now)).some((n) => n.slotIds.includes(keepSlotId))
+      ) {
+        return null;
+      }
+      return { kind: 'duplicate_slots', unmerge: undo.unmerge };
     }
   }
 }

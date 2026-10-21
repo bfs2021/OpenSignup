@@ -5,7 +5,7 @@
  */
 
 import type { DraftFixRequest } from '@/schemas/draft-fixes';
-import { SLOTS_PER_BULK_ADD } from '@/schemas/slots';
+import { MAX_MERGE_SLOTS, SLOTS_PER_BULK_ADD } from '@/schemas/slots';
 import type { DraftCheckKind, DraftField, DraftNotice, DraftSlot } from './draft-checks';
 import { fixRequestFor, type FixableNotice } from './draft-fixes';
 import { people } from './signup-summary';
@@ -167,8 +167,12 @@ function noticeFix(notice: DraftNotice, ctx: NoticeContext): NoticeFix | undefin
       name: label ? `New name for the field “${label}”` : 'New name for the field',
     };
   }
-  // Undo adds removed slots back in one go, so a fix never removes more.
+  // Undo adds removed slots back in one go, so a fix never removes more; and
+  // one merge takes in at most so many.
   if (notice.kind === 'blank_slot' && notice.slotIds.length > SLOTS_PER_BULK_ADD) return undefined;
+  if (notice.kind === 'duplicate_slots' && notice.slotIds.length > MAX_MERGE_SLOTS) {
+    return undefined;
+  }
   const request = fixRequestFor(notice);
   if (!request) return undefined;
   switch (notice.kind) {
@@ -189,6 +193,12 @@ function noticeFix(notice: DraftNotice, ctx: NoticeContext): NoticeFix | undefin
       const label = labelOf(ctx, notice.fieldId);
       const text = label ? `Group by “${label}”` : 'Group by date';
       return { type: 'button', label: text, name: text, request };
+    }
+    case 'duplicate_slots': {
+      // Several sets of copies each have this button; the name says which.
+      const label = 'Merge into one slot';
+      const summary = slotSummary(ctx, notice.values);
+      return { type: 'button', label, name: summary ? `${label}: “${summary}”` : label, request };
     }
     default:
       return undefined;
@@ -221,5 +231,7 @@ export function fixDoneText(notice: FixableNotice, ctx: NoticeContext, label = '
       const name = labelOf(ctx, notice.fieldId);
       return `Grouped the slots by ${name ? `“${name}”` : 'date'}.`;
     }
+    case 'duplicate_slots':
+      return `Merged ${notice.slotIds.length} slots into one ${forPeople(notice.capacity)}.`;
   }
 }

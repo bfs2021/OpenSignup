@@ -32,6 +32,8 @@ export const UI = {
   // one slot with nothing in it ("Remove them" for several), Undo for the last
   // fix, and the link the others have instead.
   removeBlankSlot: 'Remove it',
+  // Slots that are copies of each other.
+  mergeCopies: 'Merge into one slot',
   undo: 'Undo',
   fixInBuilder: 'Fix in the builder',
   // Each of its cards' button; the test finds it by its card.

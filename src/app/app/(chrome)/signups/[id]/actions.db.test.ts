@@ -534,6 +534,25 @@ describe('applyDraftFixAction and undoDraftFixAction (db)', () => {
         expect(after.settings.groupByFieldRefs).toEqual(['date']);
       },
     },
+    // Numbered rows after another slot: merged into one "Helper" slot that
+    // takes all their places, its number dropped.
+    duplicate_slots: {
+      template: [text('what', 'What', 0), dateField('date', 'Date', 1)],
+      slots: [
+        { capacity: 2, values: { what: 'Setup', date: '2030-11-14' }, sortOrder: 0 },
+        { capacity: 1, values: { what: 'Helper 1', date: '2030-11-14' }, sortOrder: 1 },
+        { capacity: 1, values: { what: 'Helper 2', date: '2030-11-14' }, sortOrder: 2 },
+        { capacity: 1, values: { what: 'Helper 3', date: '2030-11-14' }, sortOrder: 3 },
+      ],
+      request: (s) => ({ kind: 'duplicate_slots', slotIds: s.ids.slots.slice(1) }),
+      done: 'Merged 3 slots into one for 3 people.',
+      fixed: (after) => {
+        expect(after.slots.map(({ values, capacity }) => ({ values, capacity }))).toEqual([
+          { values: { what: 'Setup', date: '2030-11-14' }, capacity: 2 },
+          { values: { what: 'Helper', date: '2030-11-14' }, capacity: 3 },
+        ]);
+      },
+    },
   };
 
   async function draftFor(scenario: Scenario): Promise<{ id: string; before: Snapshot }> {
@@ -675,6 +694,57 @@ describe('applyDraftFixAction and undoDraftFixAction (db)', () => {
     ).toEqual({ error: 'Give it a name other than “Untitled”.' });
     expect(await snapshot(id)).toEqual(before);
     expect(await events(id, 'review.notice_accepted')).toHaveLength(0);
+  });
+
+  it('keeps the merged slot when undo finds its places changed since, and says so', async () => {
+    const scenario = SCENARIOS.duplicate_slots;
+    const { id, before } = await draftFor(scenario);
+    const applied = await applyDraftFixAction(id, scenario.request(before));
+    if ('error' in applied) throw new Error(applied.error);
+    const kept = before.ids.slots[1]!;
+    const edited = await updateSlot(db, owner, kept, { capacity: 10 });
+    if (!edited.ok) throw new Error(edited.error.message);
+    const changed = await snapshot(id);
+
+    expect(await undoDraftFixAction(id, applied.undo)).toEqual({
+      error: 'That changed again since, so it can’t be undone.',
+    });
+    expect(await snapshot(id)).toEqual(changed);
+    expect(await events(id, 'review.fix_undone')).toHaveLength(0);
+  });
+
+  it('merges copies with no limit as one with no limit, and undoes it only once', async () => {
+    const { id, before } = await draftFor({
+      ...SCENARIOS.duplicate_slots,
+      slots: [
+        { capacity: null, values: { what: 'Snacks', date: '2030-11-14' }, sortOrder: 0 },
+        { capacity: 2, values: { what: 'Snacks', date: '2030-11-14' }, sortOrder: 1 },
+        { capacity: 1, values: { what: 'Setup', date: '2030-11-14' }, sortOrder: 2 },
+      ],
+    });
+    const applied = await applyDraftFixAction(id, {
+      kind: 'duplicate_slots',
+      slotIds: before.ids.slots.slice(0, 2),
+    });
+    if ('error' in applied) throw new Error(applied.error);
+    expect(applied.done).toBe('Merged 2 slots into one with no limit.');
+    expect(
+      (await snapshot(id)).slots.map(({ values, capacity }) => ({ values, capacity })),
+    ).toEqual([
+      { values: { what: 'Snacks', date: '2030-11-14' }, capacity: null },
+      { values: { what: 'Setup', date: '2030-11-14' }, capacity: 1 },
+    ]);
+
+    expect(await undoDraftFixAction(id, applied.undo)).toBeNull();
+    const undone = await snapshot(id);
+    expect(withoutIds(undone)).toEqual(withoutIds(before));
+    // Sent again, as after an answer that never arrived: the kept slot has no
+    // limit either way, so it's the copies being back that refuse it.
+    expect(await undoDraftFixAction(id, applied.undo)).toEqual({
+      error: 'That changed again since, so it can’t be undone.',
+    });
+    expect(await snapshot(id)).toEqual(undone);
+    expect(await events(id, 'review.fix_undone')).toHaveLength(1);
   });
 
   it('refuses an undo it can’t read, and changes nothing', async () => {

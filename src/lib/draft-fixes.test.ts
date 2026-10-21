@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { DraftFixUndo } from '@/schemas/draft-fixes';
 import type { SlotFieldDefinition } from '@/schemas/slot-fields';
+import type { SlotUnmergeInput } from '@/schemas/slots';
 import { checkDraft, type DraftNotice, type DraftNoticeOf } from './draft-checks';
 import {
   buildUndo,
@@ -8,6 +9,7 @@ import {
   findNoticeFor,
   fixRequestFor,
   labelProblem,
+  mergeRequestFor,
   planUndo,
   restoredLabel,
   type DraftState,
@@ -112,6 +114,37 @@ describe('findNoticeFor', () => {
   it('finds nothing once the problem is gone', () => {
     expect(findNoticeFor([], { kind: 'empty_field', fieldId: 'f_notes' })).toBeNull();
   });
+
+  it('matches copies only when they are exactly the same slots, in any order', () => {
+    const copies: DraftNotice[] = [
+      ...notices,
+      {
+        kind: 'duplicate_slots',
+        slotIds: ['a', 'b'],
+        keepSlotId: 'a',
+        capacity: 2,
+        values: {},
+        numbered: false,
+      },
+      {
+        kind: 'duplicate_slots',
+        slotIds: ['e', 'f', 'g'],
+        keepSlotId: 'e',
+        capacity: 3,
+        values: {},
+        numbered: true,
+      },
+    ];
+    expect(findNoticeFor(copies, { kind: 'duplicate_slots', slotIds: ['b', 'a'] })).toBe(copies[4]);
+    expect(findNoticeFor(copies, { kind: 'duplicate_slots', slotIds: ['e', 'f', 'g'] })).toBe(
+      copies[5],
+    );
+    // A copy added or merged away since: not the set the organizer saw.
+    expect(findNoticeFor(copies, { kind: 'duplicate_slots', slotIds: ['e', 'f'] })).toBeNull();
+    expect(findNoticeFor(copies, { kind: 'duplicate_slots', slotIds: ['a', 'b', 'e'] })).toBeNull();
+    // Blank slots are never copies, whatever ids are sent.
+    expect(findNoticeFor(copies, { kind: 'duplicate_slots', slotIds: ['c', 'd'] })).toBeNull();
+  });
 });
 
 describe('fixRequestFor', () => {
@@ -128,11 +161,53 @@ describe('fixRequestFor', () => {
       kind: 'ungrouped_dates',
       fieldId: 'f',
     });
+    expect(
+      fixRequestFor({
+        kind: 'duplicate_slots',
+        slotIds: ['a', 'b'],
+        keepSlotId: 'a',
+        capacity: 2,
+        values: { what: 'Setup' },
+        numbered: false,
+      }),
+    ).toEqual({ kind: 'duplicate_slots', slotIds: ['a', 'b'] });
   });
 
   it('has none for a field with no name (it takes a name) or a kind with no fix', () => {
     expect(fixRequestFor({ kind: 'unnamed_field', fieldId: 'f' })).toBeNull();
     expect(fixRequestFor({ kind: 'placeholder', slotIds: ['a'], word: 'TBD' })).toBeNull();
+  });
+});
+
+describe('mergeRequestFor', () => {
+  it('keeps the kept slot’s own values for identical copies', () => {
+    const before = state({
+      fields: [what],
+      slots: [
+        slot('a', { what: 'Setup ' }, { capacity: 2 }),
+        slot('b', { what: 'Setup' }),
+        slot('c', { what: 'Till' }),
+      ],
+    });
+    expect(mergeRequestFor(only(before, 'duplicate_slots'), before)).toEqual({
+      keepSlotId: 'a',
+      slotIds: ['a', 'b'],
+    });
+  });
+
+  it('sends the values without the number for numbered rows', () => {
+    const before = state({
+      slots: [
+        slot('a', { date: '2030-11-14', what: 'Helper 1' }),
+        slot('b', { what: 'Helper 2', date: '2030-11-14' }),
+        slot('c', { what: 'Setup', date: '2030-11-14' }),
+      ],
+    });
+    expect(mergeRequestFor(only(before, 'duplicate_slots'), before)).toEqual({
+      keepSlotId: 'a',
+      slotIds: ['a', 'b'],
+      values: { date: '2030-11-14', what: 'Helper' },
+    });
   });
 });
 
@@ -241,6 +316,29 @@ describe('buildUndo', () => {
       ref: 'date',
       previous: [],
     });
+  });
+});
+
+describe('buildUndo for a merge', () => {
+  const unmerge: SlotUnmergeInput = {
+    keepSlotId: 'a',
+    previous: { values: { what: 'Helper 1' }, capacity: 1 },
+    restored: [{ values: { what: 'Helper 2' }, capacity: 1, sortOrder: 1, status: 'open' }],
+  };
+  const before = state({
+    fields: [what],
+    slots: [slot('a', { what: 'Helper 1' }), slot('b', { what: 'Helper 2' }, { sortOrder: 1 })],
+  });
+
+  it('passes on what the merge service gave back, as it is', () => {
+    expect(buildUndo(only(before, 'duplicate_slots'), before, '', unmerge)).toEqual({
+      kind: 'duplicate_slots',
+      unmerge,
+    });
+  });
+
+  it('has nothing to build a merge’s undo from on its own', () => {
+    expect(() => buildUndo(only(before, 'duplicate_slots'), before)).toThrow();
   });
 });
 
@@ -380,6 +478,54 @@ describe('planUndo', () => {
     });
     expect(planUndo(undo, state({ settings: { groupByFieldRefs: ['what'] } }))).toBeNull();
     expect(planUndo(undo, state({ settings: {} }))).toBeNull();
+  });
+});
+
+describe('planUndo for a merge', () => {
+  const unmerge: SlotUnmergeInput = {
+    keepSlotId: 'a',
+    previous: { values: { what: 'Helper 1' }, capacity: 1 },
+    restored: [
+      { values: { what: 'Helper 2' }, capacity: 1, sortOrder: 1, status: 'open' },
+      { values: { what: 'Helper 3' }, capacity: 2, sortOrder: 2, status: 'open' },
+    ],
+  };
+  const undo: DraftFixUndo = { kind: 'duplicate_slots', unmerge };
+  const merged = (capacity: number | null) =>
+    state({ fields: [what], slots: [slot('a', { what: 'Helper' }, { capacity })] });
+
+  it('unmerges while the kept slot holds the merged total', () => {
+    expect(planUndo(undo, merged(4))).toEqual({ kind: 'duplicate_slots', unmerge });
+  });
+
+  it('can’t once the kept slot is gone or its places changed', () => {
+    expect(planUndo(undo, merged(5))).toBeNull();
+    expect(planUndo(undo, merged(null))).toBeNull();
+    expect(planUndo(undo, state({ fields: [what], slots: [] }))).toBeNull();
+  });
+
+  it('can’t twice when the kept slot had no limit, which its capacity can’t show', () => {
+    const unlimited: DraftFixUndo = {
+      kind: 'duplicate_slots',
+      unmerge: {
+        keepSlotId: 'a',
+        previous: { values: { what: 'Snacks' }, capacity: null },
+        restored: [{ values: { what: 'Snacks' }, capacity: 2, sortOrder: 1, status: 'open' }],
+      },
+    };
+    const once = state({
+      fields: [what],
+      slots: [slot('a', { what: 'Snacks' }, { capacity: null })],
+    });
+    expect(planUndo(unlimited, once)).toMatchObject({ kind: 'duplicate_slots' });
+    const twice = state({
+      fields: [what],
+      slots: [
+        slot('a', { what: 'Snacks' }, { capacity: null }),
+        slot('b', { what: 'Snacks' }, { capacity: 2, sortOrder: 1 }),
+      ],
+    });
+    expect(planUndo(unlimited, twice)).toBeNull();
   });
 });
 
