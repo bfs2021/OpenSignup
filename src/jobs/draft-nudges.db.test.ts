@@ -79,6 +79,8 @@ interface DraftOptions {
   filled?: boolean;
   /** The `signup.created` row's templateId. Defaults to the manual form's. */
   templateId?: string;
+  /** Made through a connected app's token, as the MCP tools do. */
+  viaClientId?: string;
 }
 
 /**
@@ -89,7 +91,7 @@ interface DraftOptions {
 async function makeDraft(fx: Fixture, title: string, opts: DraftOptions = {}): Promise<string> {
   const created = await createSignup(
     fx.db,
-    fx.actor,
+    opts.viaClientId ? { ...fx.actor, via: { clientId: opts.viaClientId } } : fx.actor,
     fx.workspaceId,
     { title, description: '', tags: [], visibility: 'unlisted', settings: {} },
     {
@@ -243,9 +245,40 @@ describe('draft email (db)', () => {
   });
 
   it('sends nothing for a draft a connected AI assistant created', async () => {
-    const signupId = await makeDraft(fx, 'From an assistant', { templateId: 'mcp' });
+    const signupId = await makeDraft(fx, 'From an assistant', {
+      templateId: 'mcp',
+      viaClientId: 'https://assistant.example/client.json',
+    });
     expect(await dueIds(fx.db)).not.toContain(signupId);
     await expectNoSend(signupId, 'made by an AI assistant');
+  });
+
+  it('counts a value of only spaces as empty, as the review page does', async () => {
+    const signupId = await makeDraft(fx, 'Spaces', { filled: false });
+    await fx.db
+      .update(slots)
+      .set({ values: { what: '   ' } })
+      .where(eq(slots.signupId, signupId));
+    expect(await dueIds(fx.db)).not.toContain(signupId);
+    await expectNoSend(signupId, 'no slot filled in');
+  });
+
+  it('sends nothing once its organizer can no longer edit it', async () => {
+    const signupId = await makeDraft(fx, 'Made a viewer');
+    expect(await dueIds(fx.db)).toContain(signupId);
+    await fx.db
+      .update(workspaceMembers)
+      .set({ role: 'viewer' })
+      .where(eq(workspaceMembers.organizerId, fx.organizerId));
+    try {
+      expect(await dueIds(fx.db)).not.toContain(signupId);
+      await expectNoSend(signupId, 'organizer can no longer edit it');
+    } finally {
+      await fx.db
+        .update(workspaceMembers)
+        .set({ role: 'owner' })
+        .where(eq(workspaceMembers.organizerId, fx.organizerId));
+    }
   });
 
   it('emails about a Magic Compose draft', async () => {

@@ -7,6 +7,7 @@ import type { Db } from '@/db/client';
 import { sendDraftEmail } from '@/email/draft-nudge';
 import { activityActor, recordActivity } from '@/lib/activity';
 import { serviceError, type ServiceError } from '@/lib/errors';
+import { log } from '@/lib/log';
 import { requireOrganizer, requireWorkspaceWrite, type Actor } from '@/lib/policy';
 import { err, ok, type Result } from '@/lib/result';
 import { readLiveSignup } from './locks';
@@ -44,13 +45,18 @@ export async function emailDraftLink(
 
   // Written after the send, outside any transaction, as reminder.sent is: it
   // records that the transport took the email, and there is no change to
-  // write it with.
-  await recordActivity(db, {
-    signupId: signup.id,
-    workspaceId: signup.workspaceId,
-    actor: activityActor(actor),
-    eventType: 'draft.nudge_sent',
-    payload: { channel: 'email', trigger: 'requested' },
-  });
+  // write it with. The email went, so a failure here is logged rather than
+  // reported: "didn't send" would be untrue and invite a second one.
+  try {
+    await recordActivity(db, {
+      signupId: signup.id,
+      workspaceId: signup.workspaceId,
+      actor: activityActor(actor),
+      eventType: 'draft.nudge_sent',
+      payload: { channel: 'email', trigger: 'requested' },
+    });
+  } catch (e) {
+    log.error({ err: e, signupId: signup.id }, 'draft email sent but not recorded');
+  }
   return ok({ to: actor.email });
 }

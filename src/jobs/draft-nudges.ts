@@ -9,6 +9,7 @@
 import { and, eq, isNull, sql, type SQL } from 'drizzle-orm';
 import { getDb, type Db } from '@/db/client';
 import { activity } from '@/db/schema/activity';
+import { workspaceMembers } from '@/db/schema/members';
 import { organizers } from '@/db/schema/organizers';
 import { signups } from '@/db/schema/signups';
 import { slotFields } from '@/db/schema/slot-fields';
@@ -17,6 +18,7 @@ import { recordActivity } from '@/lib/activity';
 import { DRAFT_NUDGE_DELAY_HOURS, DRAFT_NUDGE_MAX_AGE_HOURS } from '@/lib/draft-nudge';
 import { log } from '@/lib/log';
 import { sendDraftEmail } from '@/email/draft-nudge';
+import { failedRuleNames } from './due-rules';
 import { getBoss, QUEUES, type DraftNudgeSendPayload } from './queue';
 
 /**
@@ -35,24 +37,33 @@ const draftNudgeDueRules = {
   // Bounds the scan (see DRAFT_NUDGE_MAX_AGE_HOURS): the first deploy must
   // not email every old draft in the table.
   'started too long ago': sql`${signups.createdAt} > now() - make_interval(hours => ${DRAFT_NUDGE_MAX_AGE_HOURS})`,
-  // A slot with a value in one of the signup's own fields. `->>` gives NULL
-  // for a missing key and for JSON null, and '' for an empty string, so this
-  // holds exactly where `renderFieldValue` would print something, which is
-  // `hasFilledSlot`'s test. Values under a ref no field has don't count, as
-  // they don't on the page.
+  // A slot with something other than whitespace under one of the signup's
+  // own fields. `->>` gives NULL for a missing key and for JSON null, so this
+  // is `hasFilledSlot`'s test as far as SQL can ask it; the send checks again
+  // with `hasFilledSlot` itself. Values under a ref no field has don't count,
+  // as they don't on the page.
   'no slot filled in': sql`EXISTS (
     SELECT 1 FROM ${slots}
     JOIN ${slotFields} ON ${slotFields.signupId} = ${slots.signupId}
     WHERE ${slots.signupId} = ${signups.id}
-      AND (${slots.values} ->> ${slotFields.ref}) <> ''
+      AND (${slots.values} ->> ${slotFields.ref}) ~ '\\S'
   )`,
   // A draft a connected AI assistant created: the organizer is in the middle
-  // of a conversation with it, and the assistant gives them the links.
+  // of a conversation with it, and the assistant gives them the links. Every
+  // change made through a token carries `viaClientId` (`activityActor`).
   'made by an AI assistant': sql`NOT EXISTS (
     SELECT 1 FROM ${activity}
     WHERE ${activity.signupId} = ${signups.id}
       AND ${activity.eventType} = 'signup.created'
-      AND (${activity.payload} ->> 'templateId') = 'mcp'
+      AND ${activity.payload} ? 'viaClientId'
+  )`,
+  // The email's button opens a page to publish from: someone since made a
+  // viewer of the workspace, or taken out of it, can't.
+  'organizer can no longer edit it': sql`EXISTS (
+    SELECT 1 FROM ${workspaceMembers}
+    WHERE ${workspaceMembers.workspaceId} = ${signups.workspaceId}
+      AND ${workspaceMembers.organizerId} = ${signups.organizerId}
+      AND ${workspaceMembers.role} <> 'viewer'
   )`,
   'organizer opted out': isNull(organizers.draftEmailsOptedOutAt),
   // Sent already, by an earlier job or by "Email me a link to finish later".
@@ -71,11 +82,8 @@ const draftNudgeDueCondition = and(...Object.values(draftNudgeDueRules))!;
  * rules, so the reasons can't drift from the decision.
  */
 async function draftNudgeSkipReasons(db: Db, signupId: string): Promise<string[] | null> {
-  const failed = Object.entries(draftNudgeDueRules).map(
-    ([reason, rule]) => sql`CASE WHEN coalesce(${rule}, false) THEN NULL ELSE ${reason}::text END`,
-  );
   const [row] = await db
-    .select({ reasons: sql<string[]>`array_remove(ARRAY[${sql.join(failed, sql`, `)}], NULL)` })
+    .select({ reasons: failedRuleNames(draftNudgeDueRules) })
     .from(signups)
     .innerJoin(organizers, eq(organizers.id, signups.organizerId))
     .where(eq(signups.id, signupId))
@@ -135,7 +143,6 @@ export async function sendDraftNudgeJob(payload: DraftNudgeSendPayload): Promise
     }
     return;
   }
-  if (!row.email) return;
 
   // The 'already sent' rule above is the only thing stopping a second email,
   // and it is a check, not a lock, as in sendReminderJob: it holds while one
@@ -150,8 +157,10 @@ export async function sendDraftNudgeJob(payload: DraftNudgeSendPayload): Promise
     requested: false,
   });
   if (!sent) {
+    // The SQL rule passed but the page's own test didn't: a value the page
+    // doesn't show, such as a date it can't read. Named apart from the rule.
     log.info(
-      { signupId: payload.signupId, reasons: ['no slot filled in'] },
+      { signupId: payload.signupId, reasons: ['nothing filled in shows on the page'] },
       'draft email no longer due; skipping',
     );
     return;

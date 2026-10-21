@@ -13,6 +13,7 @@ import { REMINDER_LEAD_HOURS } from '@/schemas/signups';
 import { reminderOptOutTokenFor } from '@/services/reminder-optout';
 import { alreadyRecorded, loadCommitmentRow, slotText } from '@/email/commitment-row';
 import { sendReminder } from '@/email/send';
+import { failedRuleNames } from './due-rules';
 import { getBoss, QUEUES, type ReminderSendPayload } from './queue';
 
 /** The reminder lead time as a SQL interval. Fixed for every signup. */
@@ -69,13 +70,8 @@ const reminderDueCondition = and(...Object.values(reminderDueRules))!;
  * reasons cannot drift from what the scan and the job decide.
  */
 async function reminderSkipReasons(db: Db, commitmentId: string): Promise<string[] | null> {
-  const failed = Object.entries(reminderDueRules).map(
-    ([reason, rule]) => sql`CASE WHEN coalesce(${rule}, false) THEN NULL ELSE ${reason}::text END`,
-  );
   const [row] = await db
-    .select({
-      reasons: sql<string[]>`array_remove(ARRAY[${sql.join(failed, sql`, `)}], NULL)`,
-    })
+    .select({ reasons: failedRuleNames(reminderDueRules) })
     .from(commitments)
     .innerJoin(slots, eq(slots.id, commitments.slotId))
     .innerJoin(signups, eq(signups.id, commitments.signupId))
