@@ -336,6 +336,13 @@ test.describe('help: create and publish your first signup', () => {
       data: { settings: { groupByFieldRefs: ['date'] } },
     });
     expect(grouped.ok()).toBe(true);
+    // Without the template's empty slot, which would sit in a "(no date)"
+    // group of its own.
+    const template = (await (await page.request.get(`/api/signups/${id}`)).json()).data
+      .slots as { id: string }[];
+    for (const { id: slotId } of template) {
+      expect((await page.request.delete(`/api/slots/${slotId}`)).ok()).toBe(true);
+    }
     for (const slot of [
       { values: { what: 'Fruit and water', date: '2030-04-06' }, capacity: 2 },
       { values: { what: 'Napkins', date: '2030-04-13' }, capacity: 2 },
@@ -344,7 +351,9 @@ test.describe('help: create and publish your first signup', () => {
       expect(added.ok()).toBe(true);
     }
 
-    await page.goto(`/app/signups/${id}`);
+    // Every group open, as "Show all" leaves it: only the first is open on
+    // its own, and a slot whose date changes moves to another group.
+    await page.goto(`/app/signups/${id}?all=1`);
     await expect(page.getByRole('heading', { name: UI.reviewHeading })).toBeVisible();
     const editor = page.locator('[data-testid^="slot-editor-"]');
     const saved = page.locator('#slots').getByRole('status');
