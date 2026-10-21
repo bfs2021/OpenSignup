@@ -168,6 +168,10 @@ export function CreateAndPublishASignup() {
               <Ui>{UI.capacity}</Ui>, then choose <Ui>{UI.done}</Ui> to save it. To close it without
               saving, choose <Ui>{UI.cancel}</Ui>.
             </p>
+            <p>
+              If your slots are grouped by date, choose <Ui>{UI.removeDay}</Ui> under a date to
+              remove it and all its slots. Right after, <Ui>{UI.undo}</Ui> puts them back.
+            </p>
           </Step>
           <Step>
             <p>

@@ -289,6 +289,38 @@ describe('<ReviewSlotRow />', () => {
     expect(rowButton('Napkins')).toHaveAttribute('aria-expanded', 'true');
   });
 
+  it('closes a slot that leaves the list while open, as its day is removed', async () => {
+    const { rerender } = renderList();
+    await open('Fruit and water');
+    // The page comes back without it.
+    rerender(
+      <ReviewSlotEditing signupId="sig_1" fields={FIELDS} id="slots" className="">
+        <ul>
+          <ReviewSlotRow slot={SLOTS[1]!}>
+            <RowContents title="Napkins" people="1 person" />
+          </ReviewSlotRow>
+        </ul>
+      </ReviewSlotEditing>,
+    );
+    expect(screen.queryByLabelText('What value')).toBeNull();
+    // And with it again, as after Undo: closed, not opened again on its own.
+    rerender(
+      <ReviewSlotEditing signupId="sig_1" fields={FIELDS} id="slots" className="">
+        <ul>
+          <ReviewSlotRow slot={SLOTS[0]!}>
+            <RowContents title="Fruit and water" people="2 people" />
+          </ReviewSlotRow>
+          <ReviewSlotRow slot={SLOTS[1]!}>
+            <RowContents title="Napkins" people="1 person" />
+          </ReviewSlotRow>
+        </ul>
+      </ReviewSlotEditing>,
+    );
+    expect(rowButton('Fruit and water')).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByLabelText('What value')).toBeNull();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   // A save can move the slot to another group, as a new date does when the
   // list is grouped by date. Its row is then a new one, under a group that
   // may be folded.

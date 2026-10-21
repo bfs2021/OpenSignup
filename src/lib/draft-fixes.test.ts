@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { DraftFixUndo } from '@/schemas/draft-fixes';
+import type { DraftFixUndo, RemoveDayRequest } from '@/schemas/draft-fixes';
 import { serviceError } from '@/lib/errors';
 import type { SlotFieldDefinition } from '@/schemas/slot-fields';
 import type { SlotUnmergeInput } from '@/schemas/slots';
@@ -7,12 +7,16 @@ import { checkDraft, type DraftNotice, type DraftNoticeOf } from './draft-checks
 import {
   buildUndo,
   draftInputOf,
+  findDayFor,
   findNoticeFor,
   fixRequestFor,
   labelProblem,
   mergeRefusal,
   mergeRequestFor,
   planUndo,
+  removableDays,
+  removeDayRequest,
+  removeDayUndo,
   restoredLabel,
   type DraftState,
 } from './draft-fixes';
@@ -603,6 +607,242 @@ describe('a fix and its undo', () => {
       field: { ref: 'notes', label: 'Notes', fieldType: 'text', config: notes.config },
       beforeFieldId: 'f_date',
       settings: { groupByFieldRefs: ['notes'] },
+    });
+  });
+});
+
+// Remove day (#504): one date's group of the review page's slot list.
+describe('removableDays', () => {
+  const byDate = { groupByFieldRefs: ['date'] };
+  const week = state({
+    settings: byDate,
+    slots: [
+      slot('a', { what: 'Setup', date: '2030-04-06' }, { sortOrder: 0 }),
+      slot('b', { what: 'Till', date: '2030-04-13' }, { sortOrder: 1 }),
+      slot('c', { what: 'Cleanup', date: '2030-04-06' }, { sortOrder: 2 }),
+      slot('d', { what: 'Raffle' }, { sortOrder: 3 }),
+    ],
+  });
+
+  it('is each date’s group, as the page lists them, with every slot in it', () => {
+    expect(removableDays(week)).toEqual([
+      { ref: 'date', value: '2030-04-06', label: 'Sat, Apr 6', slotIds: ['a', 'c'] },
+      { ref: 'date', value: '2030-04-13', label: 'Sat, Apr 13', slotIds: ['b'] },
+    ]);
+  });
+
+  it('is never the group of slots with no date', () => {
+    expect(removableDays(week).map((d) => d.value)).not.toContain('__unset__');
+  });
+
+  it('is none on a page not grouped, or grouped by a field that isn’t a date', () => {
+    expect(removableDays({ ...week, settings: {} })).toEqual([]);
+    expect(removableDays({ ...week, settings: { groupByFieldRefs: ['what'] } })).toEqual([]);
+    // Grouped by a field the signup no longer has.
+    expect(removableDays({ ...week, fields: [what] })).toEqual([]);
+  });
+
+  it('reads the grouping as the slot list does: the first field named', () => {
+    expect(removableDays({ ...week, settings: { groupByFieldRefs: ['what', 'date'] } })).toEqual(
+      [],
+    );
+    expect(
+      removableDays({ ...week, settings: { groupByFieldRefs: ['date', 'what'] } }),
+    ).toHaveLength(2);
+  });
+
+  it('leaves out a day holding the only slots with anything filled in', () => {
+    const lone = state({
+      settings: byDate,
+      slots: [
+        slot('a', { what: 'Setup', date: '2030-04-06' }),
+        slot('b', { what: ' ' }),
+        slot('c', {}),
+      ],
+    });
+    expect(removableDays(lone)).toEqual([]);
+    // A date counts as filled in, as on the page.
+    const twoDays = state({
+      settings: byDate,
+      slots: [slot('a', { what: 'Setup', date: '2030-04-06' }), slot('b', { date: '2030-04-13' })],
+    });
+    expect(removableDays(twoDays).map((d) => d.value)).toEqual(['2030-04-06', '2030-04-13']);
+  });
+
+  it('leaves out a day with more slots than Undo can add back in one go', () => {
+    const big = state({
+      settings: byDate,
+      slots: [
+        ...Array.from({ length: 501 }, (_, i) => slot(`s${i}`, { date: '2030-04-06' })),
+        slot('x', { what: 'Till', date: '2030-04-13' }),
+      ],
+    });
+    expect(removableDays(big).map((d) => d.value)).toEqual(['2030-04-13']);
+  });
+
+  it('is what Remove day sends', () => {
+    expect(removeDayRequest(removableDays(week)[0]!)).toEqual({
+      kind: 'remove_day',
+      ref: 'date',
+      value: '2030-04-06',
+      slotIds: ['a', 'c'],
+    });
+  });
+});
+
+describe('findDayFor', () => {
+  const now = state({
+    settings: { groupByFieldRefs: ['date'] },
+    slots: [
+      slot('a', { what: 'Setup', date: '2030-04-06' }),
+      slot('b', { what: 'Till', date: '2030-04-13' }),
+      slot('c', { what: 'Cleanup', date: '2030-04-06' }),
+    ],
+  });
+  const request: RemoveDayRequest = {
+    kind: 'remove_day',
+    ref: 'date',
+    value: '2030-04-06',
+    slotIds: ['c', 'a'],
+  };
+
+  it('finds the day with exactly the slots the page showed, in any order', () => {
+    expect(findDayFor(now, request)).toEqual({
+      ref: 'date',
+      value: '2030-04-06',
+      label: 'Sat, Apr 6',
+      slotIds: ['a', 'c'],
+    });
+  });
+
+  it('finds nothing once a slot moved into the day or out of it, or the day is gone', () => {
+    expect(findDayFor(now, { ...request, slotIds: ['a'] })).toBeNull();
+    expect(findDayFor(now, { ...request, slotIds: ['a', 'c', 'b'] })).toBeNull();
+    expect(findDayFor(now, { ...request, value: '2030-04-20' })).toBeNull();
+  });
+
+  it('finds nothing on a page grouped another way since, or by another field', () => {
+    expect(findDayFor({ ...now, settings: {} }, request)).toBeNull();
+    expect(findDayFor(now, { ...request, ref: 'what' })).toBeNull();
+  });
+
+  it('never finds the slots with no date', () => {
+    const undated = state({
+      settings: { groupByFieldRefs: ['date'] },
+      slots: [slot('a', { what: 'Setup' }), slot('b', { what: 'Till', date: '2030-04-13' })],
+    });
+    expect(
+      findDayFor(undated, { kind: 'remove_day', ref: 'date', value: '__unset__', slotIds: ['a'] }),
+    ).toBeNull();
+  });
+});
+
+describe('removeDayUndo', () => {
+  it('remembers the slots it took out as they were, in list order, and the day', () => {
+    const before = state({
+      settings: { groupByFieldRefs: ['date'] },
+      slots: [
+        slot('a', { what: 'Setup', date: '2030-04-06' }, { sortOrder: 0, capacity: 2 }),
+        slot('b', { what: 'Till', date: '2030-04-13' }, { sortOrder: 1 }),
+        slot(
+          'c',
+          { what: 'Cleanup', date: '2030-04-06' },
+          { sortOrder: 2, capacity: null, status: 'closed' },
+        ),
+      ],
+    });
+    const day = removableDays(before)[0]!;
+    expect(removeDayUndo(day, before, ['a', 'c'])).toEqual({
+      kind: 'remove_day',
+      ref: 'date',
+      value: '2030-04-06',
+      slots: [
+        { values: { what: 'Setup', date: '2030-04-06' }, capacity: 2, sortOrder: 0, closed: false },
+        {
+          values: { what: 'Cleanup', date: '2030-04-06' },
+          capacity: null,
+          sortOrder: 2,
+          closed: true,
+        },
+      ],
+    });
+    // Only the slots that went, when one was refused partway.
+    expect(removeDayUndo(day, before, ['a'])).toMatchObject({
+      slots: [{ values: { what: 'Setup', date: '2030-04-06' } }],
+    });
+  });
+});
+
+describe('planUndo for Remove day', () => {
+  const undo: DraftFixUndo = {
+    kind: 'remove_day',
+    ref: 'date',
+    value: '2030-04-06',
+    slots: [
+      {
+        values: { what: 'Setup', date: '2030-04-06', notes: 'Gym' },
+        capacity: 2,
+        sortOrder: 0,
+        closed: false,
+      },
+      {
+        values: { what: 'Cleanup', date: '2030-04-06' },
+        capacity: null,
+        sortOrder: 2,
+        closed: true,
+      },
+    ],
+  };
+  const after = state({
+    settings: { groupByFieldRefs: ['date'] },
+    slots: [slot('b', { what: 'Till', date: '2030-04-13' }, { sortOrder: 1 })],
+  });
+
+  it('adds the slots back as they were, filled in or not, with the fields that still exist', () => {
+    expect(planUndo(undo, after)).toEqual({
+      kind: 'remove_day',
+      rows: [
+        { values: { what: 'Setup', date: '2030-04-06' }, capacity: 2, sortOrder: 0 },
+        { values: { what: 'Cleanup', date: '2030-04-06' }, capacity: null, sortOrder: 2 },
+      ],
+      closed: [1],
+    });
+  });
+
+  it('adds them back on a page grouped another way since', () => {
+    expect(planUndo(undo, { ...after, settings: {} })).toMatchObject({ kind: 'remove_day' });
+  });
+
+  it('can’t once a slot is on that day again: the undo ran already, or the day was added back', () => {
+    const again = state({
+      slots: [...after.slots, slot('e', { what: 'Setup', date: '2030-04-06' }, { sortOrder: 0 })],
+    });
+    expect(planUndo(undo, again)).toBeNull();
+  });
+
+  it('can’t once the date field is gone, or no longer a date', () => {
+    expect(planUndo(undo, { ...after, fields: [what] })).toBeNull();
+    const retyped = field('f_date', 'date', 'Date', 'text', 1);
+    expect(planUndo(undo, { ...after, fields: [what, retyped] })).toBeNull();
+  });
+});
+
+describe('Remove day and its undo', () => {
+  it('puts back what it took out, on the signup as Remove day left it', () => {
+    const before = state({
+      settings: { groupByFieldRefs: ['date'] },
+      slots: [
+        slot('a', { what: 'Setup', date: '2030-04-06' }, { sortOrder: 0 }),
+        slot('b', { what: 'Till', date: '2030-04-13' }, { sortOrder: 1 }),
+      ],
+    });
+    const day = findDayFor(before, removeDayRequest(removableDays(before)[0]!))!;
+    const undo = removeDayUndo(day, before, day.slotIds);
+    const after = state({ settings: before.settings, slots: [before.slots[1]!] });
+    expect(planUndo(undo, after)).toEqual({
+      kind: 'remove_day',
+      rows: [{ values: { what: 'Setup', date: '2030-04-06' }, capacity: 1, sortOrder: 0 }],
+      closed: [],
     });
   });
 });

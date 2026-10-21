@@ -11,8 +11,13 @@
  */
 
 import { serviceError, type ServiceError } from '@/lib/errors';
-import type { DraftFixKind, DraftFixRequest, DraftFixUndo } from '@/schemas/draft-fixes';
-import type { SlotUnmergeInput } from '@/schemas/slots';
+import type {
+  DraftFixKind,
+  DraftFixRequest,
+  DraftFixUndo,
+  RemoveDayRequest,
+} from '@/schemas/draft-fixes';
+import { SLOTS_PER_BULK_ADD, type SlotUnmergeInput } from '@/schemas/slots';
 import {
   LABEL_MAX_LENGTH,
   UNTITLED_FIELD_LABEL,
@@ -27,7 +32,8 @@ import {
   type DraftSlot,
 } from './draft-checks';
 import { resolveAnchorRef } from './reminder-fields';
-import { groupByRef } from './signup-summary';
+import { groupByRef, hasFilledSlot } from './signup-summary';
+import { groupKeyOf, renderFieldValue } from './slot-label';
 
 /** A notice of one of the kinds with a one-tap fix (`DraftFixKind`). */
 export type FixableNotice = DraftNoticeOf<DraftFixKind>;
@@ -228,20 +234,8 @@ export function buildUndo(
         },
       };
     }
-    case 'blank_slot': {
-      const ids = new Set(notice.slotIds);
-      return {
-        kind: 'blank_slot',
-        slots: before.slots
-          .filter((s) => ids.has(s.id))
-          .map((s) => ({
-            values: s.values,
-            capacity: s.capacity,
-            sortOrder: s.sortOrder,
-            closed: s.status === 'closed',
-          })),
-      };
-    }
+    case 'blank_slot':
+      return { kind: 'blank_slot', slots: removedSlots(before, notice.slotIds) };
     case 'unnamed_field': {
       const field = before.fields.find((f) => f.id === notice.fieldId);
       if (!field) throw new Error('buildUndo: the notice names a field the signup lacks');
@@ -260,6 +254,13 @@ export function buildUndo(
   }
 }
 
+/** Slots to add back in one go, and which of them to close again. */
+interface SlotsBack {
+  rows: { values: Record<string, unknown>; capacity: number | null; sortOrder: number }[];
+  /** The rows, by index, that were closed. */
+  closed: number[];
+}
+
 /** What Undo asks of the services, worked out from the undo and the signup as it is now. */
 export type UndoPlan =
   | {
@@ -270,12 +271,7 @@ export type UndoPlan =
       /** Settings to put back once the field is there again; null for none. */
       settings: { reminderFromFieldRef?: string; groupByFieldRefs?: string[] } | null;
     }
-  | {
-      kind: 'blank_slot';
-      rows: { values: Record<string, unknown>; capacity: number | null; sortOrder: number }[];
-      /** The rows, by index, that were closed. */
-      closed: number[];
-    }
+  | ({ kind: 'blank_slot' | 'remove_day' } & SlotsBack)
   | { kind: 'unnamed_field'; fieldId: string; label: string }
   | { kind: 'ungrouped_dates'; groupByFieldRefs: string[] }
   | { kind: 'duplicate_slots'; unmerge: SlotUnmergeInput };
@@ -329,20 +325,10 @@ export function planUndo(undo: DraftFixUndo, now: DraftState): UndoPlan | null {
       // already ran (its answer lost, say) or one was added since: putting
       // them back again would double them.
       if (findBlankSlots(draftInputOf(now)).length > 0) return null;
-      // With the values of the fields that still exist, as deleting a field
-      // leaves every slot; and only blank slots come back.
-      const refs = new Set(now.fields.map((f) => f.ref));
-      const rows = undo.slots.map((s) => ({
-        values: Object.fromEntries(Object.entries(s.values).filter(([ref]) => refs.has(ref))),
-        capacity: s.capacity,
-        sortOrder: s.sortOrder,
-      }));
-      if (rows.some((r) => !Object.values(r.values).every(isEmpty))) return null;
-      return {
-        kind: 'blank_slot',
-        rows,
-        closed: undo.slots.flatMap((s, i) => (s.closed ? [i] : [])),
-      };
+      // Only blank slots come back.
+      const back = slotsBack(undo.slots, now);
+      if (back.rows.some((r) => !Object.values(r.values).every(isEmpty))) return null;
+      return { kind: 'blank_slot', ...back };
     }
     case 'unnamed_field': {
       const field = now.fields.find((f) => f.id === undo.fieldId);
@@ -359,5 +345,150 @@ export function planUndo(undo: DraftFixUndo, now: DraftState): UndoPlan | null {
       // undo already made) is `unmergeSlots`' to say, under its lock.
       if (!now.slots.some((s) => s.id === undo.unmerge.keepSlotId)) return null;
       return { kind: 'duplicate_slots', unmerge: undo.unmerge };
+    case 'remove_day': {
+      // The day's date has to mean what it did: the field still there, and
+      // still a date.
+      const field = now.fields.find((f) => f.ref === undo.ref);
+      if (!field || field.fieldType !== 'date') return null;
+      // A slot on that day now means this undo already ran (its answer lost,
+      // say) or the day was added again since: putting the slots back would
+      // double them, or mix them into a day made since.
+      if (now.slots.some((s) => groupKeyOf(s.values[undo.ref]) === undo.value)) return null;
+      return { kind: 'remove_day', ...slotsBack(undo.slots, now) };
+    }
   }
+}
+
+/** Slots as they were before a fix or Remove day took them out, in list order. */
+function removedSlots(
+  before: DraftState,
+  slotIds: readonly string[],
+): Extract<DraftFixUndo, { kind: 'blank_slot' }>['slots'] {
+  const ids = new Set(slotIds);
+  return before.slots
+    .filter((s) => ids.has(s.id))
+    .map((s) => ({
+      values: s.values,
+      capacity: s.capacity,
+      sortOrder: s.sortOrder,
+      closed: s.status === 'closed',
+    }));
+}
+
+/**
+ * Removed slots to add back, with the values of the fields that still exist,
+ * as deleting a field leaves every slot.
+ */
+function slotsBack(
+  slots: Extract<DraftFixUndo, { kind: 'blank_slot' }>['slots'],
+  now: DraftState,
+): SlotsBack {
+  const refs = new Set(now.fields.map((f) => f.ref));
+  return {
+    rows: slots.map((s) => ({
+      values: Object.fromEntries(Object.entries(s.values).filter(([ref]) => refs.has(ref))),
+      capacity: s.capacity,
+      sortOrder: s.sortOrder,
+    })),
+    closed: slots.flatMap((s, i) => (s.closed ? [i] : [])),
+  };
+}
+
+/**
+ * A day the review page offers to remove (issue #504): one group of its slot
+ * list, on a page grouped by a date field.
+ */
+export interface RemovableDay {
+  /** The date field's ref. */
+  ref: string;
+  /** The group's value of it (its key in `groupSlots`). */
+  value: string;
+  /** The day as the group's header shows it: "Sat, Apr 6". */
+  label: string;
+  /** Every slot in the group, in list order, folded or not. */
+  slotIds: string[];
+}
+
+/**
+ * The days the review page offers Remove day on, in list order. Only on a
+ * page grouped by a date field (the only grouping the page reads), and only
+ * for a group with a date: slots with none sit in a "(no date)" group, which
+ * is no day. Never a day holding more slots than Undo adds back in one go;
+ * and never one whose slots are the only ones with anything filled in, as the
+ * draft would then open in the builder, and Undo would be lost with the page.
+ */
+export function removableDays(signup: {
+  fields: readonly SlotFieldDefinition[];
+  slots: readonly DraftSlot[];
+  settings: unknown;
+}): RemovableDay[] {
+  const ref = groupByRef(signup.settings);
+  const field = signup.fields.find((f) => f.ref === ref);
+  if (!field || field.fieldType !== 'date') return [];
+  const days = new Map<string, { ids: string[]; filled: number }>();
+  let filled = 0;
+  for (const slot of signup.slots) {
+    const key = groupKeyOf(slot.values[field.ref]);
+    const day = days.get(key) ?? { ids: [], filled: 0 };
+    days.set(key, day);
+    day.ids.push(slot.id);
+    // As the review page reads it before it sends a draft to the builder.
+    if (hasFilledSlot({ fields: signup.fields, slots: [slot] })) {
+      day.filled++;
+      filled++;
+    }
+  }
+  const noDate = groupKeyOf(undefined);
+  return [...days].flatMap(([value, day]) =>
+    value !== noDate && day.ids.length <= SLOTS_PER_BULK_ADD && filled > day.filled
+      ? [
+          {
+            ref: field.ref,
+            value,
+            label: renderFieldValue(field, value) ?? value,
+            slotIds: day.ids,
+          },
+        ]
+      : [],
+  );
+}
+
+/** What the review page's Remove day sends for `day`. */
+export function removeDayRequest(day: RemovableDay): RemoveDayRequest {
+  return { kind: 'remove_day', ref: day.ref, value: day.value, slotIds: day.slotIds };
+}
+
+/**
+ * The day `request` is about, on the draft as it is now, or null: it has to
+ * be one the page would offer, with exactly the same slots, as for a fix
+ * (`findNoticeFor`). A slot moved into the day or out of it since, the page
+ * grouped another way, or the day gone already, and nothing is removed.
+ */
+export function findDayFor(
+  state: Pick<DraftState, 'fields' | 'slots' | 'settings'>,
+  request: RemoveDayRequest,
+): RemovableDay | null {
+  return (
+    removableDays(state).find(
+      (d) =>
+        d.ref === request.ref && d.value === request.value && sameIds(d.slotIds, request.slotIds),
+    ) ?? null
+  );
+}
+
+/**
+ * How to undo Remove day: the slots it took out as they were, from the
+ * signup as it was just before. `removed` is those it did take out.
+ */
+export function removeDayUndo(
+  day: RemovableDay,
+  before: DraftState,
+  removed: readonly string[],
+): DraftFixUndo {
+  return {
+    kind: 'remove_day',
+    ref: day.ref,
+    value: day.value,
+    slots: removedSlots(before, removed),
+  };
 }

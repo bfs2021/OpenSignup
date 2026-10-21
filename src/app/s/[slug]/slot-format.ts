@@ -1,7 +1,7 @@
 import type { SignupViewField, SignupViewSlot } from './signup-view-types';
 // Single implementation, shared with the emails so a slot reads the same in
 // both places. See src/lib/slot-label.ts.
-import { renderFieldValue } from '@/lib/slot-label';
+import { groupKeyOf, renderFieldValue } from '@/lib/slot-label';
 
 export { pickPrimaryField, renderFieldValue } from '@/lib/slot-label';
 
@@ -31,8 +31,7 @@ export function groupSlots<S extends Pick<SignupViewSlot, 'values'>>(
   const map = new Map<string, SlotGroup<S>>();
   for (const slot of slots) {
     const raw = slot.values[groupField.ref];
-    const isUnset = raw === undefined || raw === null || raw === '';
-    const key = isUnset ? '__unset__' : String(raw);
+    const key = groupKeyOf(raw);
     const label = formatGroupLabel(groupField, raw);
     const existing = map.get(key);
     if (existing) {

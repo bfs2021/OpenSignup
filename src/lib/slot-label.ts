@@ -86,6 +86,17 @@ export function renderFieldValue(field: LabelledField, raw: unknown): string | n
   return String(raw);
 }
 
+/**
+ * Which group of the slot list a slot's value of the group field puts it in:
+ * the value as a string, or `'__unset__'` for the "(no date)" group of slots
+ * without one. The public page and the review page group by it
+ * (`groupSlots`), and the review page's Remove day finds the same day again
+ * by it on the server.
+ */
+export function groupKeyOf(raw: unknown): string {
+  return raw === undefined || raw === null || raw === '' ? '__unset__' : String(raw);
+}
+
 /** One printable `Label: value` line from a slot's field values. */
 export interface SlotDetail {
   label: string;

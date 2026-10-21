@@ -1,5 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { formatSlotDate, formatSlotTime, renderFieldValue, slotDetails } from './slot-label';
+import {
+  formatSlotDate,
+  formatSlotTime,
+  groupKeyOf,
+  renderFieldValue,
+  slotDetails,
+} from './slot-label';
 
 const fields = [
   { ref: 'date', label: 'Date', fieldType: 'date' },
@@ -111,5 +117,13 @@ describe('renderFieldValue for time fields', () => {
 
   it('leaves a text field that looks like a time alone', () => {
     expect(renderFieldValue({ ref: 'x', label: 'X', fieldType: 'text' }, '18:30')).toBe('18:30');
+  });
+});
+
+describe('groupKeyOf', () => {
+  it('is the value as a string, or one key for every slot without one', () => {
+    expect(groupKeyOf('2030-04-06')).toBe('2030-04-06');
+    expect(groupKeyOf(3)).toBe('3');
+    for (const none of [undefined, null, '']) expect(groupKeyOf(none)).toBe('__unset__');
   });
 });

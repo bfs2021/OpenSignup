@@ -235,3 +235,16 @@ export function fixDoneText(notice: FixableNotice, ctx: NoticeContext, label = '
       return `Merged ${notice.slotIds.length} slots into one ${forPeople(notice.capacity)}.`;
   }
 }
+
+/**
+ * What the review page says once Remove day is done, next to Undo: "Removed
+ * Sat, Apr 6 and its 4 slots.", the day as its group's header shows it. Only
+ * some of them when a slot was refused partway, as one someone signed up for
+ * after the draft was published meanwhile.
+ */
+export function removeDayDoneText(day: string, removed: number, total: number): string {
+  if (removed < total) return `Removed ${removed} of the ${total} slots on ${day}.`;
+  return removed === 1
+    ? `Removed ${day} and its slot.`
+    : `Removed ${day} and its ${removed} slots.`;
+}

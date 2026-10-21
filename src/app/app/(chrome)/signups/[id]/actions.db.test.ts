@@ -12,15 +12,21 @@ import { makeId } from '@/lib/ids';
 import type { Actor } from '@/lib/policy';
 import { chargeRateLimit, RateLimits } from '@/lib/rate-limit';
 import { DEFAULT_TEMPLATE, type SignupTemplate } from '@/lib/signup-templates';
-import type { DraftFixKind, DraftFixRequest, DraftFixUndo } from '@/schemas/draft-fixes';
-import { createSignup, publishSignup } from '@/services/signups';
-import { listFieldsForSignup, updateField } from '@/services/slot-fields';
+import type {
+  DraftFixKind,
+  DraftFixRequest,
+  DraftFixUndo,
+  RemoveDayRequest,
+} from '@/schemas/draft-fixes';
+import { createSignup, publishSignup, updateSignup } from '@/services/signups';
+import { deleteField, listFieldsForSignup, updateField } from '@/services/slot-fields';
 import { addSlot, updateSlot } from '@/services/slots';
 import {
   applyDraftFixAction,
   deleteSignupAction,
   emailDraftLinkAction,
   publishAction,
+  removeDayAction,
   setRequireEmailAction,
   undoDraftFixAction,
 } from './actions';
@@ -439,7 +445,7 @@ describe('applyDraftFixAction and undoDraftFixAction (db)', () => {
 
   async function events(
     signupId: string,
-    eventType: 'review.notice_accepted' | 'review.fix_undone',
+    eventType: 'review.notice_accepted' | 'review.fix_undone' | 'slot.deleted',
   ) {
     const rows = await db
       .select({ payload: activity.payload, actorId: activity.actorId })
@@ -771,6 +777,226 @@ describe('applyDraftFixAction and undoDraftFixAction (db)', () => {
     });
     expect(await snapshot(id)).toEqual(undone);
     expect(await events(id, 'review.fix_undone')).toHaveLength(1);
+  });
+
+  // Remove day (#504): every slot of one date's group on a page grouped by
+  // date, through the same Undo.
+  describe('removeDayAction', () => {
+    // Two days, their slots interleaved, one of Sat, Apr 6's closed, and a
+    // slot with no date, which is no day.
+    const week: Scenario = {
+      template: [text('what', 'What', 0), dateField('date', 'Date', 1), text('notes', 'Notes', 2)],
+      slots: [
+        { capacity: 2, values: { what: 'Setup', date: '2030-04-06', notes: 'Gym' }, sortOrder: 0 },
+        { capacity: 1, values: { what: 'Till', date: '2030-04-13' }, sortOrder: 1 },
+        { capacity: null, values: { what: 'Cleanup', date: '2030-04-06' }, sortOrder: 2 },
+        { capacity: 3, values: { what: 'Snacks', date: '2030-04-06' }, sortOrder: 3 },
+        { capacity: 1, values: { what: 'Raffle' }, sortOrder: 4 },
+      ],
+      settings: { groupByFieldRefs: ['date'] },
+      setup: async (s) => {
+        const closed = await updateSlot(db, owner, s.ids.slots[2]!, { status: 'closed' });
+        if (!closed.ok) throw new Error(closed.error.message);
+      },
+      // Unused: Remove day sends its own request.
+      request: () => {
+        throw new Error('not a fix');
+      },
+      done: '',
+      fixed: () => {},
+    };
+    const SAT_APR_6 = [0, 2, 3];
+    const sat = (s: Snapshot): RemoveDayRequest => ({
+      kind: 'remove_day',
+      ref: 'date',
+      value: '2030-04-06',
+      slotIds: SAT_APR_6.map((i) => s.ids.slots[i]!),
+    });
+    const stale = { error: 'That changed since you opened this page, so nothing was done.' };
+    const changedAgain = { error: 'That changed again since, so it can’t be undone.' };
+
+    it('removes the day and its slots; Undo puts them back as they were', async () => {
+      const { id, before } = await draftFor(week);
+
+      const removed = await removeDayAction(id, sat(before));
+      if ('error' in removed) throw new Error(removed.error);
+      expect(removed.done).toBe('Removed Sat, Apr 6 and its 3 slots.');
+      expect(removed.undo.kind).toBe('remove_day');
+      expect(revalidatePath).toHaveBeenCalledWith(`/app/signups/${id}`, 'layout');
+      const after = await snapshot(id);
+      expect(after.slots.map((s) => s.values)).toEqual([
+        { what: 'Till', date: '2030-04-13' },
+        { what: 'Raffle' },
+      ]);
+      // Logged as any deleted slot is, and not as a notice's fix.
+      expect(await events(id, 'slot.deleted')).toHaveLength(3);
+      expect(await events(id, 'review.notice_accepted')).toHaveLength(0);
+
+      // The undo goes to the browser and back as plain data.
+      const undo = JSON.parse(JSON.stringify(removed.undo)) as DraftFixUndo;
+      revalidatePath.mockClear();
+      expect(await undoDraftFixAction(id, undo)).toBeNull();
+      expect(revalidatePath).toHaveBeenCalledWith(`/app/signups/${id}`, 'layout');
+      // Values, places, order and the closed slot closed again.
+      expect(withoutIds(await snapshot(id))).toEqual(withoutIds(before));
+      expect(await events(id, 'review.fix_undone')).toEqual([
+        { payload: { kind: 'remove_day' }, actorId: organizerId },
+      ]);
+    });
+
+    it('says a day of one slot as one', async () => {
+      const { id, before } = await draftFor(week);
+      const removed = await removeDayAction(id, {
+        kind: 'remove_day',
+        ref: 'date',
+        value: '2030-04-13',
+        slotIds: [before.ids.slots[1]!],
+      });
+      expect(removed).toMatchObject({ done: 'Removed Sat, Apr 13 and its slot.' });
+    });
+
+    it('removes nothing once a slot moved out of the day, or one was added to it', async () => {
+      const moved = await draftFor(week);
+      const edited = await updateSlot(db, owner, moved.before.ids.slots[3]!, {
+        values: { what: 'Snacks', date: '2030-04-13' },
+      });
+      if (!edited.ok) throw new Error(edited.error.message);
+      const movedNow = await snapshot(moved.id);
+      revalidatePath.mockClear();
+      expect(await removeDayAction(moved.id, sat(moved.before))).toEqual(stale);
+      expect(await snapshot(moved.id)).toEqual(movedNow);
+      // The page comes back as it is now.
+      expect(revalidatePath).toHaveBeenCalled();
+
+      // An AI assistant adds a slot to that day meanwhile.
+      const added = await draftFor(week);
+      const extra = await addSlot(db, owner, added.id, {
+        values: { what: 'Music', date: '2030-04-06' },
+        capacity: 1,
+      });
+      if (!extra.ok) throw new Error(extra.error.message);
+      const addedNow = await snapshot(added.id);
+      expect(await removeDayAction(added.id, sat(added.before))).toEqual(stale);
+      expect(await snapshot(added.id)).toEqual(addedNow);
+      expect(await events(added.id, 'slot.deleted')).toHaveLength(0);
+    });
+
+    it('removes nothing a second time', async () => {
+      const { id, before } = await draftFor(week);
+      expect(await removeDayAction(id, sat(before))).not.toHaveProperty('error');
+      const removed = await snapshot(id);
+      expect(await removeDayAction(id, sat(before))).toEqual(stale);
+      expect(await snapshot(id)).toEqual(removed);
+    });
+
+    it('undoes it only once', async () => {
+      const { id, before } = await draftFor(week);
+      const removed = await removeDayAction(id, sat(before));
+      if ('error' in removed) throw new Error(removed.error);
+      expect(await undoDraftFixAction(id, removed.undo)).toBeNull();
+      const undone = await snapshot(id);
+      // Sent again, as after an answer that never arrived.
+      expect(await undoDraftFixAction(id, removed.undo)).toEqual(changedAgain);
+      expect(await snapshot(id)).toEqual(undone);
+      expect(await events(id, 'review.fix_undone')).toHaveLength(1);
+    });
+
+    it('won’t undo once the day was added again since, or its date field is gone', async () => {
+      const readded = await draftFor(week);
+      const removed = await removeDayAction(readded.id, sat(readded.before));
+      if ('error' in removed) throw new Error(removed.error);
+      const again = await addSlot(db, owner, readded.id, {
+        values: { what: 'Setup', date: '2030-04-06' },
+        capacity: 2,
+      });
+      if (!again.ok) throw new Error(again.error.message);
+      const readdedNow = await snapshot(readded.id);
+      expect(await undoDraftFixAction(readded.id, removed.undo)).toEqual(changedAgain);
+      expect(await snapshot(readded.id)).toEqual(readdedNow);
+
+      const dropped = await draftFor(week);
+      const gone = await removeDayAction(dropped.id, sat(dropped.before));
+      if ('error' in gone) throw new Error(gone.error);
+      const deleted = await deleteField(db, owner, dropped.before.ids.fields[1]!);
+      if (!deleted.ok) throw new Error(deleted.error.message);
+      const droppedNow = await snapshot(dropped.id);
+      expect(await undoDraftFixAction(dropped.id, gone.undo)).toEqual(changedAgain);
+      expect(await snapshot(dropped.id)).toEqual(droppedNow);
+      expect(await events(dropped.id, 'review.fix_undone')).toHaveLength(0);
+    });
+
+    it('refuses a viewer in plain words and removes nothing', async () => {
+      const { id, before } = await draftFor(week);
+      session.actor = viewer;
+      expect(await removeDayAction(id, sat(before))).toEqual({
+        error: 'You don’t have edit access.',
+      });
+      expect(await snapshot(id)).toEqual(before);
+      expect(revalidatePath).not.toHaveBeenCalled();
+    });
+
+    it('refuses a signup that is published', async () => {
+      const { id, before } = await draftFor(week);
+      const published = await publishSignup(db, owner, id);
+      if (!published.ok) throw new Error(published.error.message);
+      expect(await removeDayAction(id, sat(before))).toEqual({
+        error: 'This signup isn’t a draft any more. Change it in the builder.',
+      });
+      expect(await snapshot(id)).toEqual({ ...before, status: 'open' });
+      expect(revalidatePath).not.toHaveBeenCalled();
+    });
+
+    it('removes nothing on a page that isn’t grouped by a date', async () => {
+      const ungrouped = await draftFor({ ...week, settings: {} });
+      expect(await removeDayAction(ungrouped.id, sat(ungrouped.before))).toEqual(stale);
+      expect(await snapshot(ungrouped.id)).toEqual(ungrouped.before);
+
+      // Grouped by "What", a text field: no group is a day.
+      const byWhat = await draftFor(week);
+      const regrouped = await updateSignup(db, owner, byWhat.id, {
+        settings: { groupByFieldRefs: ['what'] },
+      });
+      if (!regrouped.ok) throw new Error(regrouped.error.message);
+      const byWhatNow = await snapshot(byWhat.id);
+      expect(
+        await removeDayAction(byWhat.id, {
+          kind: 'remove_day',
+          ref: 'what',
+          value: 'Setup',
+          slotIds: [byWhat.before.ids.slots[0]!],
+        }),
+      ).toEqual(stale);
+      expect(await snapshot(byWhat.id)).toEqual(byWhatNow);
+    });
+
+    it('removes nothing that would leave no slot filled in', async () => {
+      // One day, and a slot with nothing in it: the page wouldn't offer it.
+      const { id, before } = await draftFor({
+        ...week,
+        slots: [
+          { capacity: 1, values: { what: 'Setup', date: '2030-04-06' }, sortOrder: 0 },
+          { capacity: 1, values: {}, sortOrder: 1 },
+        ],
+        setup: undefined,
+      });
+      expect(
+        await removeDayAction(id, {
+          kind: 'remove_day',
+          ref: 'date',
+          value: '2030-04-06',
+          slotIds: [before.ids.slots[0]!],
+        }),
+      ).toEqual(stale);
+      expect(await snapshot(id)).toEqual(before);
+    });
+
+    it('refuses a request it can’t read, and removes nothing', async () => {
+      const { id, before } = await draftFor(week);
+      expect(
+        await removeDayAction(id, { ...sat(before), slotIds: [] } as RemoveDayRequest),
+      ).toEqual({ error: 'Couldn’t remove that day. Try again.' });
+      expect(await snapshot(id)).toEqual(before);
+    });
   });
 
   it('refuses an undo it can’t read, and changes nothing', async () => {

@@ -4,16 +4,18 @@ import { checkDraft } from '@/lib/draft-checks';
 import {
   buildUndo,
   draftInputOf,
+  findDayFor,
   findNoticeFor,
   labelProblem,
   mergeRefusal,
   mergeRequestFor,
   planUndo,
+  removeDayUndo,
   type DraftState,
   type FixableNotice,
   type UndoPlan,
 } from '@/lib/draft-fixes';
-import { fixDoneText } from '@/lib/draft-notices';
+import { fixDoneText, removeDayDoneText } from '@/lib/draft-notices';
 import { serviceError, type ServiceError } from '@/lib/errors';
 import { parseInputSafe } from '@/lib/parse';
 import { requireWorkspaceWrite, type Actor } from '@/lib/policy';
@@ -21,8 +23,9 @@ import { err, ok, type Result } from '@/lib/result';
 import {
   DraftFixRequestSchema,
   DraftFixUndoSchema,
-  type DraftFixKind,
+  RemoveDayRequestSchema,
   type DraftFixUndo,
+  type DraftUndoKind,
 } from '@/schemas/draft-fixes';
 import type { SlotUnmergeInput } from '@/schemas/slots';
 import { getSignupForOrganizer, updateSignup } from './signups';
@@ -31,15 +34,16 @@ import { mergeSlots, unmergeSlots } from './slot-merge';
 import { addSlotsBulk, deleteSlot, updateSlot } from './slots';
 
 /**
- * The review page's one-tap fixes and their Undo (issue #503). Each fix and
- * each undo is made by the services the builder and the AI connector use, or,
- * for copies, by `mergeSlots` and `unmergeSlots`, so it is checked, locked and
- * logged as theirs are; this only decides which of them to call. Drafts only:
- * anything else is refused with `conflict` and `details.reason: 'not_draft'`.
+ * The review page's one-tap fixes (issue #503), its Remove day (issue #504),
+ * and their Undo. Each change and each undo is made by the services the
+ * builder and the AI connector use, or, for copies, by `mergeSlots` and
+ * `unmergeSlots`, so it is checked, locked and logged as theirs are; this only
+ * decides which of them to call. Drafts only: anything else is refused with
+ * `conflict` and `details.reason: 'not_draft'`.
  */
 
 export interface AppliedDraftFix {
-  kind: DraftFixKind;
+  kind: DraftUndoKind;
   /** For Undo, which sends it back. */
   undo: DraftFixUndo;
   /** What the page says was done, next to Undo. */
@@ -161,27 +165,8 @@ async function fix(
       return r.ok ? ok({ notice }) : r;
     }
     case 'blank_slot': {
-      // One at a time, each in its own transaction, as the builder deletes
-      // them. A slot gone already is what the fix wanted. Anything else stops
-      // it, and Undo covers the slots that did go.
-      const removed: string[] = [];
-      let refused: ServiceError | null = null;
-      for (const id of notice.slotIds) {
-        const r = await deleteSlot(db, actor, id, { force: false });
-        if (r.ok) {
-          removed.push(id);
-        } else {
-          refused = r.error;
-          if (r.error.code !== 'not_found') break;
-        }
-      }
-      // Every one gone already: another tab got there first.
-      if (removed.length === 0) {
-        return err(
-          refused && refused.code !== 'not_found' ? refused : conflict('stale', 'no slot to remove'),
-        );
-      }
-      return ok({ notice: { ...notice, slotIds: removed } });
+      const r = await removeSlots(db, actor, notice.slotIds);
+      return r.ok ? ok({ notice: { ...notice, slotIds: r.value } }) : r;
     }
     case 'unnamed_field': {
       const r = await updateField(db, actor, notice.fieldId, { label });
@@ -204,18 +189,89 @@ async function fix(
 }
 
 /**
- * Undoes a fix from the undo `applyDraftFix` returned, by the inverse
- * changes through the same services. Refused with `conflict` and
- * `details.reason: 'changed'` when the signup has changed since in a way the
- * undo would overwrite (`planUndo`). Writes `review.fix_undone` with the kind,
- * best effort, once it's done.
+ * Deletes slots one at a time, each in its own transaction, as the builder
+ * deletes them, and never one someone has signed up for. A slot gone already
+ * is what was wanted. Anything else stops it, and Undo covers the slots that
+ * did go. Returns those, or, when none went, why: every one gone already
+ * (another tab got there first) is `conflict` with `details.reason: 'stale'`.
+ */
+async function removeSlots(
+  db: Db,
+  actor: Actor,
+  slotIds: readonly string[],
+): Promise<Result<string[], ServiceError>> {
+  const removed: string[] = [];
+  let refused: ServiceError | null = null;
+  for (const id of slotIds) {
+    const r = await deleteSlot(db, actor, id, { force: false });
+    if (r.ok) {
+      removed.push(id);
+    } else {
+      refused = r.error;
+      if (r.error.code !== 'not_found') break;
+    }
+  }
+  if (removed.length === 0) {
+    return err(
+      refused && refused.code !== 'not_found' ? refused : conflict('stale', 'no slot to remove'),
+    );
+  }
+  return ok(removed);
+}
+
+/**
+ * Remove day on a draft's review page (issue #504): deletes every slot of the
+ * day `rawInput` names, one group of the slot list on a page grouped by a
+ * date field. The day is found again on the signup as it is now and must be
+ * one the page offers with exactly the slots the request names
+ * (`findDayFor`); otherwise nothing changes and the answer is `conflict` with
+ * `details.reason: 'stale'`, as for a fix: a slot moved into the day or out
+ * of it, or added to it, by another tab or an AI assistant since the page
+ * loaded. As there, the check runs before the deletes, not inside their
+ * transactions.
+ *
+ * Returns the same as a fix, so `undoDraftFix` is its Undo too. Writes no
+ * `review.*` row of its own: each slot's `slot.deleted` records it.
+ */
+export async function removeDraftDay(
+  db: Db,
+  actor: Actor,
+  signupId: string,
+  rawInput: unknown,
+): Promise<Result<AppliedDraftFix, ServiceError>> {
+  const input = parseInputSafe(RemoveDayRequestSchema, rawInput);
+  if (!input.ok) return input;
+
+  const loaded = await loadDraft(db, actor, signupId);
+  if (!loaded.ok) return loaded;
+  const { state } = loaded.value;
+
+  const day = findDayFor(state, input.value);
+  if (!day) return err(conflict('stale', 'the draft no longer has this day as the page showed it'));
+
+  const removed = await removeSlots(db, actor, day.slotIds);
+  if (!removed.ok) return removed;
+  return ok({
+    kind: 'remove_day',
+    undo: removeDayUndo(day, state, removed.value),
+    done: removeDayDoneText(day.label, removed.value.length, day.slotIds.length),
+  });
+}
+
+/**
+ * Undoes a fix, or a Remove day, from the undo `applyDraftFix` or
+ * `removeDraftDay` returned, by the inverse changes through the same
+ * services. Refused with `conflict` and `details.reason: 'changed'` when the
+ * signup has changed since in a way the undo would overwrite (`planUndo`).
+ * Writes `review.fix_undone` with the kind (`remove_day` for a day), best
+ * effort, once it's done.
  */
 export async function undoDraftFix(
   db: Db,
   actor: Actor,
   signupId: string,
   rawInput: unknown,
-): Promise<Result<{ kind: DraftFixKind }, ServiceError>> {
+): Promise<Result<{ kind: DraftUndoKind }, ServiceError>> {
   const input = parseInputSafe(DraftFixUndoSchema, rawInput);
   if (!input.ok) return input;
 
@@ -259,7 +315,8 @@ async function undo(
       }
       return ok(null);
     }
-    case 'blank_slot': {
+    case 'blank_slot':
+    case 'remove_day': {
       const added = await addSlotsBulk(db, actor, signupId, { rows: plan.rows });
       if (!added.ok) return added;
       // A new slot is open; one that was closed is closed again.

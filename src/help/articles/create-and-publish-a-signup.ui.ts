@@ -40,6 +40,9 @@ export const UI = {
   change: 'Change',
   // Closes a card's form, or a slot opened on that page, without saving.
   cancel: 'Cancel',
+  // In each date's group on that page, when the slots are grouped by date.
+  // Its name for screen readers adds the date: "Remove day: Sat, Apr 6".
+  removeDay: 'Remove day',
   editInBuilder: 'Edit everything in the builder',
   publishFromReview: 'Publish and get the link',
   // Under those two: sends the email about an unpublished draft now.

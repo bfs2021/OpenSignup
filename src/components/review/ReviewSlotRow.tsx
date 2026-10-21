@@ -76,7 +76,8 @@ const SlotEditingContext = createContext<SlotEditing | null>(null);
  * button, opening its group if that is folded; if the slot moved past the
  * fold and has no button, focus goes to the list. Choosing another slot while
  * one is open is Done for that one first; the other opens once it has saved,
- * and not if it was refused.
+ * and not if it was refused. A slot that leaves the page while open, as with
+ * Remove day, closes without saving.
  */
 export function ReviewSlotEditing({
   signupId,
@@ -116,6 +117,16 @@ export function ReviewSlotEditing({
     setOpenId(landed.next);
     if (!landed.next) refocus.current = landed.slotId;
   }, [landed]);
+
+  // The open slot's row is gone from the page that came back (`children`),
+  // its day removed say: its editor went with it, so it is closed, not left
+  // open on nothing. Not while a save lands, which can move the row out of
+  // sight first.
+  useEffect(() => {
+    if (openId !== null && landing === null && !document.getElementById(rowButtonId(openId))) {
+      setOpenId(null);
+    }
+  }, [openId, landing, children]);
 
   useEffect(() => {
     if (openId !== null || refocus.current === null) return;

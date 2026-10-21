@@ -41,6 +41,41 @@ export type DraftFixRequest = z.infer<typeof DraftFixRequestSchema>;
  */
 export type DraftFixKind = DraftFixRequest['kind'];
 
+/** A field's ref, as the undos name one. */
+const RefSchema = z.string().min(1).max(64);
+
+/**
+ * The review page's Remove day (issue #504): every slot of one group of its
+ * slot list, on a page grouped by a date field. `value` is the group's value
+ * of that field (its key in `groupSlots`) and `slotIds` every slot the page
+ * showed in it, so the server can find the same day again on fresh data.
+ * Undo puts the slots back in one go, so a day holds at most that many.
+ */
+export const RemoveDayRequestSchema = z
+  .object({
+    kind: z.literal('remove_day'),
+    ref: RefSchema,
+    value: z.string().min(1).max(2000),
+    slotIds: z.array(IdSchema).min(1).max(SLOTS_PER_BULK_ADD),
+  })
+  .strict();
+export type RemoveDayRequest = z.infer<typeof RemoveDayRequestSchema>;
+
+/** Slots taken out, as they were, for an undo to add back. */
+const RemovedSlotsSchema = z
+  .array(
+    z
+      .object({
+        values: z.record(z.string(), z.unknown()),
+        capacity: z.number().int().positive().nullable(),
+        sortOrder: SortOrderSchema,
+        closed: z.boolean(),
+      })
+      .strict(),
+  )
+  .min(1)
+  .max(SLOTS_PER_BULK_ADD);
+
 /**
  * What it takes to undo a fix, by putting back what the fix changed through
  * the same services. The page holds it until the next fix and sends it back
@@ -75,24 +110,7 @@ export const DraftFixUndoSchema = z.discriminatedUnion('kind', [
         .strict(),
     })
     .strict(),
-  z
-    .object({
-      kind: z.literal('blank_slot'),
-      slots: z
-        .array(
-          z
-            .object({
-              values: z.record(z.string(), z.unknown()),
-              capacity: z.number().int().positive().nullable(),
-              sortOrder: SortOrderSchema,
-              closed: z.boolean(),
-            })
-            .strict(),
-        )
-        .min(1)
-        .max(SLOTS_PER_BULK_ADD),
-    })
-    .strict(),
+  z.object({ kind: z.literal('blank_slot'), slots: RemovedSlotsSchema }).strict(),
   z
     .object({
       kind: z.literal('unnamed_field'),
@@ -119,5 +137,17 @@ export const DraftFixUndoSchema = z.discriminatedUnion('kind', [
       unmerge: SlotUnmergeInputSchema,
     })
     .strict(),
+  z
+    .object({
+      kind: z.literal('remove_day'),
+      /** The date field and the day, as the request named them. */
+      ref: RefSchema,
+      value: z.string().min(1).max(2000),
+      slots: RemovedSlotsSchema,
+    })
+    .strict(),
 ]);
 export type DraftFixUndo = z.infer<typeof DraftFixUndoSchema>;
+
+/** What an undo puts back: a one-tap fix's kind, or `remove_day`. */
+export type DraftUndoKind = DraftFixUndo['kind'];

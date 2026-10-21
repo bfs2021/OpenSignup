@@ -72,5 +72,27 @@ describe('fixRefusal', () => {
     expect(fixRefusal(serviceError('internal', 'boom'), 'undo')).toBe(
       'Couldn’t undo that. Try again.',
     );
+    expect(fixRefusal(serviceError('internal', 'boom'), 'remove_day')).toBe(
+      'Couldn’t remove that day. Try again.',
+    );
+  });
+
+  it('reads Remove day as a fix, in its own words when it fails', () => {
+    expect(fixRefusal(serviceError('conflict', 'x', reason('stale')), 'remove_day')).toBe(
+      'That changed since you opened this page, so nothing was done.',
+    );
+    expect(fixRefusal(serviceError('conflict', 'x', reason('not_draft')), 'remove_day')).toBe(
+      'This signup isn’t a draft any more. Change it in the builder.',
+    );
+    expect(fixRefusal(serviceError('invalid_input', 'slotIds: too many'), 'remove_day')).toBe(
+      'Couldn’t remove that day. Try again.',
+    );
+    // Not the rename box's words, whatever field is named.
+    expect(
+      fixRefusal(
+        serviceError('invalid_input', 'x', { field: 'label', ...reason('blank') }),
+        'remove_day',
+      ),
+    ).toBe('Couldn’t remove that day. Try again.');
   });
 });

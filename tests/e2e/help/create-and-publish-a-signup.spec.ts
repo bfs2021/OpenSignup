@@ -402,6 +402,80 @@ test.describe('help: create and publish your first signup', () => {
     await expect(page.getByRole('button', { name: /^Edit slot — Cups/ })).toHaveCount(0);
   });
 
+  test('a day can be removed on the review page, and undone', async ({
+    page,
+    context,
+    isMobile,
+  }) => {
+    test.skip(isMobile, 'the same steps on a phone');
+    await loginAsSeededOrganizer(context);
+    const created = await page.request.post('/api/signups', {
+      data: {
+        title: `Review days ${Date.now()}`,
+        description: '',
+        tags: [],
+        visibility: 'unlisted',
+        settings: {},
+      },
+    });
+    expect(created.ok()).toBe(true);
+    const id = (await created.json()).data.id as string;
+    const grouped = await page.request.patch(`/api/signups/${id}`, {
+      data: { settings: { groupByFieldRefs: ['date'] } },
+    });
+    expect(grouped.ok()).toBe(true);
+    // Without the template's empty slot, which would sit in a "(no date)"
+    // group of its own.
+    const template = (await (await page.request.get(`/api/signups/${id}`)).json()).data
+      .slots as { id: string }[];
+    for (const { id: slotId } of template) {
+      expect((await page.request.delete(`/api/slots/${slotId}`)).ok()).toBe(true);
+    }
+    // Two dates, the first with two slots.
+    for (const slot of [
+      { values: { what: 'Fruit and water', date: '2030-04-06' }, capacity: 2 },
+      { values: { what: 'Napkins', date: '2030-04-06' }, capacity: 1 },
+      { values: { what: 'Cups', date: '2030-04-13' }, capacity: 2 },
+    ]) {
+      const added = await page.request.post(`/api/signups/${id}/slots`, { data: slot });
+      expect(added.ok()).toBe(true);
+    }
+
+    // Every group open, as "Show all" leaves it: only the first is open on
+    // its own.
+    await page.goto(`/app/signups/${id}?all=1`);
+    await expect(page.getByRole('heading', { name: UI.reviewHeading })).toBeVisible();
+    const firstDay = page.getByRole('button', { name: /^Edit slot — (Fruit and water|Napkins)/ });
+    const cups = page.getByRole('button', { name: /^Edit slot — Cups/ });
+    await expect(firstDay).toHaveCount(2);
+
+    // "If your slots are grouped by date, choose Remove day under a date to
+    // remove it and all its slots." Its name says which date.
+    const removeDay = page.getByRole('button', {
+      name: `${UI.removeDay}: Sat, Apr 6`,
+      exact: true,
+    });
+    await expect(removeDay).toHaveText(UI.removeDay);
+    await removeDay.click();
+    await expect(page.getByText('Removed Sat, Apr 6 and its 2 slots.')).toBeVisible();
+    await expect(firstDay).toHaveCount(0);
+    await expect(removeDay).toHaveCount(0);
+    await expect(cups).toBeVisible();
+
+    // "Right after, Undo puts them back."
+    const undo = page.getByRole('button', { name: UI.undo, exact: true });
+    await expect(undo).toBeFocused();
+    await undo.click();
+    await expect(page.getByText('Undone.')).toBeVisible();
+    await expect(undo).toHaveCount(0);
+    await expect(firstDay).toHaveCount(2);
+    await expect(removeDay).toBeVisible();
+    // Saved, not only shown.
+    await page.reload();
+    await expect(firstDay).toHaveCount(2);
+    await expect(cups).toBeVisible();
+  });
+
   test('copies of a slot can be merged into one on the review page, and undone', async ({
     page,
     context,

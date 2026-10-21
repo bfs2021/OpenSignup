@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { checkDraft, type DraftField, type DraftSlot } from './draft-checks';
-import { fixDoneText, noticeHeading, noticeText, noticeView } from './draft-notices';
+import {
+  fixDoneText,
+  noticeHeading,
+  noticeText,
+  noticeView,
+  removeDayDoneText,
+} from './draft-notices';
 
 const what: DraftField = { id: 'f_what', ref: 'what', label: 'What', fieldType: 'text' };
 const date: DraftField = { id: 'f_date', ref: 'date', label: 'Date', fieldType: 'date' };
@@ -291,5 +297,16 @@ describe('fixDoneText', () => {
     expect(fixDoneText({ kind: 'ungrouped_dates', fieldId: 'f_b', ref: 'b' }, noName)).toBe(
       'Grouped the slots by date.',
     );
+  });
+});
+
+describe('removeDayDoneText', () => {
+  it('names the day as its header shows it, and how many slots went with it', () => {
+    expect(removeDayDoneText('Sat, Apr 6', 4, 4)).toBe('Removed Sat, Apr 6 and its 4 slots.');
+    expect(removeDayDoneText('Sat, Apr 6', 1, 1)).toBe('Removed Sat, Apr 6 and its slot.');
+  });
+
+  it('says only some went when one was refused partway', () => {
+    expect(removeDayDoneText('Sat, Apr 6', 2, 4)).toBe('Removed 2 of the 4 slots on Sat, Apr 6.');
   });
 });

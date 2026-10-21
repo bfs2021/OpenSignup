@@ -11,12 +11,12 @@ import { log } from '@/lib/log';
 import { requireOrganizerId } from '@/lib/policy';
 import { chargeRateLimit, RateLimits } from '@/lib/rate-limit';
 import type { Result } from '@/lib/result';
-import type { DraftFixRequest, DraftFixUndo } from '@/schemas/draft-fixes';
+import type { DraftFixRequest, DraftFixUndo, RemoveDayRequest } from '@/schemas/draft-fixes';
 import { removeCommitment } from '@/services/commitments';
-import { applyDraftFix, undoDraftFix } from '@/services/draft-fixes';
+import { applyDraftFix, removeDraftDay, undoDraftFix } from '@/services/draft-fixes';
 import { emailDraftLink } from '@/services/draft-nudge';
 import { closeSignup, deleteSignup, publishSignup, updateSignup } from '@/services/signups';
-import { fixRefusal } from './fix-refusal';
+import { fixRefusal, type FixStep } from './fix-refusal';
 import { removeRefusal } from './remove-refusal';
 
 function revalidateSignup(id: string) {
@@ -141,11 +141,11 @@ export async function removeCommitmentAction(
 }
 
 /**
- * Runs a review-page fix or its Undo, and turns a refusal into plain words
- * (`fixRefusal`): a viewer's, which the policy guard throws, included.
+ * Runs a review-page fix, Remove day, or Undo, and turns a refusal into plain
+ * words (`fixRefusal`): a viewer's, which the policy guard throws, included.
  */
 async function runFix<T>(
-  step: 'fix' | 'undo',
+  step: FixStep,
   signupId: string,
   run: () => Promise<Result<T, ServiceError>>,
 ): Promise<{ ok: T } | { error: string }> {
@@ -193,7 +193,28 @@ export async function applyDraftFixAction(
   return { done: result.ok.done, undo: result.ok.undo };
 }
 
-/** Undo, for the last fix the review page made. Null once it's undone. */
+/**
+ * Remove day on a draft's review page: every slot of one date's group, as the
+ * page showed it. Returns what was done, in words, and the undo for it, which
+ * the page keeps until its next change and sends back to
+ * `undoDraftFixAction`, as it does a fix's.
+ */
+export async function removeDayAction(
+  signupId: string,
+  request: RemoveDayRequest,
+): Promise<{ done: string; undo: DraftFixUndo } | { error: string }> {
+  const actor = await requireActor();
+  const result = await runFix('remove_day', signupId, () =>
+    removeDraftDay(getDb(), actor, signupId, request),
+  );
+  if ('error' in result) return result;
+  return { done: result.ok.done, undo: result.ok.undo };
+}
+
+/**
+ * Undo, for the last fix or Remove day the review page made. Null once it's
+ * undone.
+ */
 export async function undoDraftFixAction(
   signupId: string,
   undo: DraftFixUndo,
