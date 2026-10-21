@@ -133,6 +133,8 @@ test.describe('help: create and publish your first signup', () => {
     // Not pressed: it sends an email, and the article only names it.
     await expect(page.getByRole('button', { name: UI.emailMeLater })).toBeVisible();
     // The three cards, without the page's heading and buttons around them.
+    // The pointer off the slot rows, which highlight under it.
+    if (CAPTURE) await page.mouse.move(0, 0);
     await shot(page, page.locator('main ol'), 'check-your-signup');
     // Change opens the card's form, with Save; Cancel closes it.
     await signUpCard.getByRole('button', { name: new RegExp(`^${UI.change}`) }).click();
