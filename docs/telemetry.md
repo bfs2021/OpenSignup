@@ -58,6 +58,8 @@ by `clientDomain` instead.
 | `signup.link_copied` | organizer | `{ surface: 'header' \| 'share_step' \| 'share_message', status }` (where the link was copied from, and the signup's status then: a draft's link only says the signup isn't ready). `header` is the copy button by the signup's link at the top of its tabs, `share_step` the share step's Copy link, and `share_message` its Copy message and link, which copies the message with the link in it. Written once the clipboard took it | client beacon from the organizer's pages, via `POST /api/signups/[id]/link-events?event=copied&surface=…`, metered per organizer (60 an hour for copies and shares together; past that, they go uncounted) |
 | `signup.link_shared` | organizer | `{ surface: 'share_step', status }` (the share step's Share…, which opens the phone's own share sheet with the link; shown only where the browser has one). Written once the sheet reports it sent; closing the sheet without sending writes nothing. Which app it went to is never known | client beacon, via `POST /api/signups/[id]/link-events?event=shared&surface=share_step`, metered with the copies |
 | `review.notice_shown` | organizer | `{ kind }`: one row per kind of problem the review page found on a draft and showed, each time the page renders (`placeholder`, `empty_field`, `blank_slot`, `duplicate_slots`, `unnamed_field`, `ungrouped_dates`, `time_in_text`; `DRAFT_CHECK_KINDS` in `src/lib/draft-checks.ts`). Never the values. A refresh writes them again, so compare kinds by distinct `signup_id` | RSC at `/app/signups/[id]`, in one insert after the page is sent |
+| `review.notice_accepted` | organizer | `{ kind }`: one row each time the organizer takes a notice's one-tap fix on the review page and it's made (`empty_field`, `blank_slot`, `unnamed_field`, `ungrouped_dates`; `DraftFixKind` in `src/schemas/draft-fixes.ts`). Never the values or a field's new name. Compare with `review.notice_shown` by kind. The fix itself is logged by the service that makes it, as any other change is (`field.deleted`, `slot.deleted`, `field.updated`, `signup.updated`). A fix refused (a viewer, a signup no longer a draft, a problem already gone) writes nothing | `services/draft-fixes.ts` (`applyDraftFix`), from the review page's server action, after the fix |
+| `review.fix_undone` | organizer | `{ kind }`: the organizer chose Undo on the last fix and it was put back, through the same services (`field.created`, `slot.created`, `slot.updated` for a slot closed again, `field.updated`, `signup.updated`): a fix they didn't want. An undo refused because the signup changed since writes nothing | `services/draft-fixes.ts` (`undoDraftFix`), from the review page's server action, after the undo |
 | `magic_compose.failed` | organizer | `{ code }`: the AI client's `not_configured` \| `rate_limited` \| `upstream` \| `invalid_json` \| `schema_mismatch` \| `timeout` \| `aborted`; `schema_mismatch` too for a draft of the wrong shape; `refusal` when the model declined; `not_saved` when the draft couldn't be saved; `over_limit` when the organizer had used up this instance's Magic Compose quota for the hour. Never the prompt or the model's words | `POST /api/signups/magic-compose`. `signup_id` is `NULL`: no signup was made |
 
 `device` is `'phone'`, `'computer'` or `'unknown'`, from the browser's
@@ -69,7 +71,9 @@ phone can be told apart from ones abandoned at a desk; public views carry
 the device.
 
 `signup.publish_refused`, `signup.link_copied`, `signup.link_shared`,
-`magic_compose.failed` and `review.notice_shown` describe no change, so each is written on its own,
+`magic_compose.failed`, `review.notice_shown`, `review.notice_accepted` and
+`review.fix_undone` describe no change of their own (a fix and its undo are
+logged by the services that make them), so each is written on its own,
 outside any transaction, and a failed write never fails the request.
 
 ### Slot / field lifecycle
@@ -418,9 +422,10 @@ edits, `auth.signed_in`, **and** the organizer-side RSC pageview events
 Build tab's `signup.viewed`) which are written with the organizer as actor,
 and the organizer's telemetry rows (`signup.publish_refused`,
 `signup.link_copied`, `signup.link_shared`, `magic_compose.failed`,
-`review.notice_shown`). So do a requested `draft.nudge_sent` and the
-`draft_email.*` opt-out rows, which are written from the email's link without
-a sign-in; the scheduled `draft.nudge_sent` is system-actor and does not.
+`review.notice_shown`, `review.notice_accepted`, `review.fix_undone`). So do a
+requested `draft.nudge_sent` and the `draft_email.*` opt-out rows, which are
+written from the email's link without a sign-in; the scheduled
+`draft.nudge_sent` is system-actor and does not.
 The public page's `signup.viewed` is system-actor and does not advance
 `last_active_at`.
 

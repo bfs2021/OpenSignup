@@ -28,6 +28,12 @@ export const UI = {
   // A draft with a slot filled in opens on this page, from Your signups and
   // after drafting from a description.
   reviewHeading: 'Check your signup, then share it',
+  // A problem the review page can fix there and then: this one's button for
+  // one slot with nothing in it ("Remove them" for several), Undo for the last
+  // fix, and the link the others have instead.
+  removeBlankSlot: 'Remove it',
+  undo: 'Undo',
+  fixInBuilder: 'Fix in the builder',
   // Each of its cards' button; the test finds it by its card.
   change: 'Change',
   editInBuilder: 'Edit everything in the builder',

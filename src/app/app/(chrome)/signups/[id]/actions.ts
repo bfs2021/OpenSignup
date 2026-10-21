@@ -6,13 +6,17 @@ import { getDb } from '@/db/client';
 import { requireOrganizerSession, toActor } from '@/auth/session';
 import type { EmailDraftLinkState } from '@/components/review/EmailDraftLink';
 import { SAVE_ERROR_MESSAGE } from '@/components/ui/save-notice';
-import { ServiceException, type ErrorCode } from '@/lib/errors';
+import { ServiceException, type ErrorCode, type ServiceError } from '@/lib/errors';
 import { log } from '@/lib/log';
 import { requireOrganizerId } from '@/lib/policy';
 import { chargeRateLimit, RateLimits } from '@/lib/rate-limit';
+import type { Result } from '@/lib/result';
+import type { DraftFixRequest, DraftFixUndo } from '@/schemas/draft-fixes';
 import { removeCommitment } from '@/services/commitments';
+import { applyDraftFix, undoDraftFix } from '@/services/draft-fixes';
 import { emailDraftLink } from '@/services/draft-nudge';
 import { closeSignup, deleteSignup, publishSignup, updateSignup } from '@/services/signups';
+import { fixRefusal } from './fix-refusal';
 import { removeRefusal } from './remove-refusal';
 
 function revalidateSignup(id: string) {
@@ -134,6 +138,63 @@ export async function removeCommitmentAction(
   // their next request.
   revalidateSignup(signupId);
   return null;
+}
+
+/**
+ * Runs a review-page fix or its Undo, and turns a refusal into plain words
+ * (`fixRefusal`): a viewer's, which the policy guard throws, included.
+ */
+async function runFix<T>(
+  step: 'fix' | 'undo',
+  signupId: string,
+  run: () => Promise<Result<T, ServiceError>>,
+): Promise<{ ok: T } | { error: string }> {
+  let result: Result<T, ServiceError>;
+  try {
+    result = await run();
+  } catch (e) {
+    if (e instanceof ServiceException) return { error: fixRefusal(e.serviceError, step) };
+    throw e;
+  }
+  if (!result.ok) {
+    // The draft changed since the page loaded, so the page is out of date:
+    // it comes back as it is now, with the message. Any other refusal leaves
+    // it alone; a signup no longer a draft would send the page to the builder
+    // and the message would never be seen.
+    const reason = result.error.details?.reason;
+    if (reason === 'stale' || reason === 'changed') revalidateSignup(signupId);
+    return { error: fixRefusal(result.error, step) };
+  }
+  // The review page comes back with this response, without the notice.
+  revalidateSignup(signupId);
+  return { ok: result.value };
+}
+
+/**
+ * A one-tap fix on a draft's review page ("Remove field", "Remove it",
+ * "Group by …", a field's new name). Returns what was done, in words, and
+ * the undo for it, which the page keeps until the next fix.
+ */
+export async function applyDraftFixAction(
+  signupId: string,
+  request: DraftFixRequest,
+): Promise<{ done: string; undo: DraftFixUndo } | { error: string }> {
+  const actor = await requireActor();
+  const result = await runFix('fix', signupId, () =>
+    applyDraftFix(getDb(), actor, signupId, request),
+  );
+  if ('error' in result) return result;
+  return { done: result.ok.done, undo: result.ok.undo };
+}
+
+/** Undo, for the last fix the review page made. Null once it's undone. */
+export async function undoDraftFixAction(
+  signupId: string,
+  undo: DraftFixUndo,
+): Promise<{ error: string } | null> {
+  const actor = await requireActor();
+  const result = await runFix('undo', signupId, () => undoDraftFix(getDb(), actor, signupId, undo));
+  return 'error' in result ? result : null;
 }
 
 export async function deleteSignupAction(signupId: string) {

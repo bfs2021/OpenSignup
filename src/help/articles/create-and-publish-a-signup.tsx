@@ -141,6 +141,12 @@ export function CreateAndPublishASignup() {
               If something needs fixing first, the page says so above your slots. A slot that still
               says TBD is one example.
             </p>
+            <p>
+              Some problems have a button that fixes them right there. For a slot with nothing in
+              it, choose <Ui>{UI.removeBlankSlot}</Ui>. Right after a fix, you can choose{' '}
+              <Ui>{UI.undo}</Ui> to put it back. For other problems, choose{' '}
+              <Ui>{UI.fixInBuilder}</Ui>.
+            </p>
             <Screenshot
               src="/help/create-and-publish-a-signup/check-your-signup.png"
               alt="Check your signup, then share it, with the signup's name, its two slots, nothing to fix, and what happens when someone signs up."

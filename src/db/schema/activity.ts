@@ -46,6 +46,8 @@ export const ACTIVITY_EVENTS = [
   'signup.link_shared',
   'magic_compose.failed',
   'review.notice_shown',
+  'review.notice_accepted',
+  'review.fix_undone',
   'slot.created',
   'slot.updated',
   'slot.deleted',

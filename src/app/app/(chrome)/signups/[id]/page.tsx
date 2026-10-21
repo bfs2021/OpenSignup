@@ -10,8 +10,9 @@ import { SignupLoadError } from '@/components/signup/SignupLoadError';
 import { StatusPill } from '@/components/status-pill';
 import { AsyncSubmitButton } from '@/components/ui/async-submit-button';
 import { checkDraft } from '@/lib/draft-checks';
-import { noticeText } from '@/lib/draft-notices';
-import { groupByRef, hasFilledSlot, reminderReach, whatHappensOnSignUp } from '@/lib/signup-summary';
+import { draftInputOf } from '@/lib/draft-fixes';
+import { noticeView } from '@/lib/draft-notices';
+import { hasFilledSlot, reminderReach, whatHappensOnSignUp } from '@/lib/signup-summary';
 import { recordNoticesShown, trackOrganizerView } from '@/lib/view-tracker';
 import {
   DESCRIPTION_MAX_LENGTH,
@@ -21,6 +22,7 @@ import {
   requiresEmail,
   sendsReminders,
 } from '@/schemas/signups';
+import { LABEL_MAX_LENGTH } from '@/schemas/slot-fields';
 import { loadSignupForOrganizer } from '@/services/signups.cached';
 import { emailDraftLinkAction, publishAction } from './actions';
 import { signupMetadata } from './signup-metadata';
@@ -61,14 +63,10 @@ export default async function SignupPage({ params, searchParams }: PageProps) {
     redirect(builderHref);
   }
 
-  // Every slot is checked, not only the ones the fold shows.
-  const groupRef = groupByRef(sig.settings);
-  const found = checkDraft({
-    fields: sig.fields,
-    slots,
-    settings: { groupByFieldRefs: groupRef ? [groupRef] : [] },
-  });
-  const notices = found.map((n) => noticeText(n, { fields: sig.fields, slots }));
+  // Every slot is checked, not only the ones the fold shows. A fix checks
+  // again through the same `draftInputOf`, so it finds what this showed.
+  const found = checkDraft(draftInputOf({ fields: sig.fields, slots, settings: sig.settings }));
+  const notices = found.map((n) => noticeView(n, { fields: sig.fields, slots }));
 
   const actor = { actorId: session.organizerId, actorType: 'organizer' } as const;
   await trackOrganizerView({
@@ -136,6 +134,7 @@ export default async function SignupPage({ params, searchParams }: PageProps) {
           showAll={all === '1'}
           builderHref={builderHref}
           notices={notices}
+          labelMaxLength={LABEL_MAX_LENGTH}
         />
         <ReviewSignUpCard
           signupId={id}

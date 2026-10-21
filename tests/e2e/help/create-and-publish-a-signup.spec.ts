@@ -258,6 +258,65 @@ test.describe('help: create and publish your first signup', () => {
     await expect(signUp.first()).toHaveText(UI.signUp);
   });
 
+  test('a problem on the review page can be fixed there, and undone', async ({
+    page,
+    context,
+    isMobile,
+  }) => {
+    test.skip(isMobile, 'the same steps on a phone');
+    await loginAsSeededOrganizer(context);
+    // A new signup starts with an empty slot. Fill in one more, and leave
+    // another saying TBD, which has no one-tap fix.
+    const created = await page.request.post('/api/signups', {
+      data: {
+        title: `Review fixes ${Date.now()}`,
+        description: '',
+        tags: [],
+        visibility: 'unlisted',
+        settings: {},
+      },
+    });
+    expect(created.ok()).toBe(true);
+    const id = (await created.json()).data.id as string;
+    for (const slot of [
+      { values: { what: 'Fruit and water', date: '2030-04-06' }, capacity: 2 },
+      { values: { what: 'TBD', date: '2030-04-13' }, capacity: 2 },
+    ]) {
+      const added = await page.request.post(`/api/signups/${id}/slots`, { data: slot });
+      expect(added.ok()).toBe(true);
+    }
+
+    await page.goto(`/app/signups/${id}`);
+    await expect(page.getByRole('heading', { name: UI.reviewHeading })).toBeVisible();
+    const notices = page.getByRole('region', { name: /to fix before you publish/ });
+    const blank = notices.getByRole('listitem').filter({ hasText: 'nothing filled in' });
+    const tbd = notices.getByRole('listitem').filter({ hasText: 'TBD' });
+    await expect(notices.getByRole('heading')).toHaveText('2 things to fix before you publish');
+    await expect(tbd.getByRole('link', { name: UI.fixInBuilder })).toBeVisible();
+    await expect(page.getByText(UI.untitledSlot, { exact: true })).toHaveCount(1);
+
+    // "For a slot with nothing in it, choose Remove it."
+    await blank.getByRole('button', { name: UI.removeBlankSlot }).click();
+    await expect(page.getByText('Removed the empty slot.')).toBeVisible();
+    await expect(blank).toHaveCount(0);
+    await expect(notices.getByRole('heading')).toHaveText('1 thing to fix before you publish');
+    await expect(page.getByText(UI.untitledSlot, { exact: true })).toHaveCount(0);
+
+    // "Right after a fix, you can choose Undo to put it back."
+    const undo = page.getByRole('button', { name: UI.undo, exact: true });
+    await expect(undo).toBeFocused();
+    await undo.click();
+    await expect(page.getByText('Undone.')).toBeVisible();
+    await expect(undo).toHaveCount(0);
+    await expect(blank).toBeVisible();
+    await expect(notices.getByRole('heading')).toHaveText('2 things to fix before you publish');
+    await expect(page.getByText(UI.untitledSlot, { exact: true })).toHaveCount(1);
+
+    // "For other problems, choose Fix in the builder."
+    await tbd.getByRole('link', { name: UI.fixInBuilder }).click();
+    await page.waitForURL(/\/build$/);
+  });
+
   test('people can sign up without an email', async ({ page, context, browser, isMobile }) => {
     test.skip(isMobile, 'the same steps on a phone; the desktop run takes the picture');
     await loginAsSeededOrganizer(context);

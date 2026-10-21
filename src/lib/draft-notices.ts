@@ -4,7 +4,10 @@
  * quotes, so they read right whatever language those are in.
  */
 
+import type { DraftFixRequest } from '@/schemas/draft-fixes';
+import { SLOTS_PER_BULK_ADD } from '@/schemas/slots';
 import type { DraftCheckKind, DraftField, DraftNotice, DraftSlot } from './draft-checks';
+import { fixRequestFor, type FixableNotice } from './draft-fixes';
 import { people } from './signup-summary';
 import { renderFieldValue } from './slot-label';
 
@@ -124,4 +127,99 @@ export function noticeText(notice: DraftNotice, ctx: NoticeContext): NoticeText 
 /** "2 things to fix before you publish". */
 export function noticeHeading(count: number): string {
   return count === 1 ? '1 thing to fix before you publish' : `${count} things to fix before you publish`;
+}
+
+/**
+ * A notice's one-tap fix, as the review page offers it: a button that sends
+ * `request`, or a box for a field's new name. `name` is the button's or the
+ * box's accessible name, which says which field when the words on screen
+ * don't.
+ */
+type NoticeFix =
+  | { type: 'button'; label: string; name: string; request: DraftFixRequest }
+  | { type: 'rename'; fieldId: string; name: string };
+
+/** A notice as the review page lists it: its words, a stable key, and its fix if it has one. */
+export interface NoticeView extends NoticeText {
+  key: string;
+  fix?: NoticeFix;
+}
+
+/** The same key for the same problem from one render to the next. */
+function noticeKey(notice: DraftNotice): string {
+  switch (notice.kind) {
+    case 'placeholder':
+    case 'blank_slot':
+      return `${notice.kind}:${notice.slotIds.join(',')}`;
+    case 'duplicate_slots':
+      return `${notice.kind}:${notice.keepSlotId}`;
+    default:
+      return `${notice.kind}:${notice.fieldId}`;
+  }
+}
+
+function noticeFix(notice: DraftNotice, ctx: NoticeContext): NoticeFix | undefined {
+  if (notice.kind === 'unnamed_field') {
+    const label = labelOf(ctx, notice.fieldId);
+    return {
+      type: 'rename',
+      fieldId: notice.fieldId,
+      name: label ? `New name for the field “${label}”` : 'New name for the field',
+    };
+  }
+  // Undo adds removed slots back in one go, so a fix never removes more.
+  if (notice.kind === 'blank_slot' && notice.slotIds.length > SLOTS_PER_BULK_ADD) return undefined;
+  const request = fixRequestFor(notice);
+  if (!request) return undefined;
+  switch (notice.kind) {
+    case 'empty_field': {
+      const label = labelOf(ctx, notice.fieldId);
+      return {
+        type: 'button',
+        label: 'Remove field',
+        name: label ? `Remove field “${label}”` : 'Remove field with no name',
+        request,
+      };
+    }
+    case 'blank_slot': {
+      const label = notice.slotIds.length === 1 ? 'Remove it' : 'Remove them';
+      return { type: 'button', label, name: label, request };
+    }
+    case 'ungrouped_dates': {
+      const label = labelOf(ctx, notice.fieldId);
+      const text = label ? `Group by “${label}”` : 'Group by date';
+      return { type: 'button', label: text, name: text, request };
+    }
+    default:
+      return undefined;
+  }
+}
+
+/** Each notice's words, key and fix, for the review page. */
+export function noticeView(notice: DraftNotice, ctx: NoticeContext): NoticeView {
+  const fix = noticeFix(notice, ctx);
+  return { ...noticeText(notice, ctx), key: noticeKey(notice), ...(fix ? { fix } : {}) };
+}
+
+/**
+ * What the review page says once a fix is made, next to Undo, from the signup
+ * as it was before. `label` is a field's new name.
+ */
+export function fixDoneText(notice: FixableNotice, ctx: NoticeContext, label = ''): string {
+  switch (notice.kind) {
+    case 'empty_field': {
+      const name = labelOf(ctx, notice.fieldId);
+      return name ? `Removed “${name}”.` : 'Removed the field with no name.';
+    }
+    case 'blank_slot': {
+      const n = notice.slotIds.length;
+      return n === 1 ? 'Removed the empty slot.' : `Removed ${n} empty slots.`;
+    }
+    case 'unnamed_field':
+      return `Named the field “${label.trim()}”.`;
+    case 'ungrouped_dates': {
+      const name = labelOf(ctx, notice.fieldId);
+      return `Grouped the slots by ${name ? `“${name}”` : 'date'}.`;
+    }
+  }
 }

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { checkDraft, type DraftField, type DraftSlot } from './draft-checks';
-import { noticeHeading, noticeText } from './draft-notices';
+import { fixDoneText, noticeHeading, noticeText, noticeView } from './draft-notices';
 
 const what: DraftField = { id: 'f_what', ref: 'what', label: 'What', fieldType: 'text' };
 const date: DraftField = { id: 'f_date', ref: 'date', label: 'Date', fieldType: 'date' };
@@ -119,5 +119,119 @@ describe('noticeHeading', () => {
   it('counts the things to fix', () => {
     expect(noticeHeading(1)).toBe('1 thing to fix before you publish');
     expect(noticeHeading(3)).toBe('3 things to fix before you publish');
+  });
+});
+
+function views(fields: DraftField[], slots: DraftSlot[], groupByFieldRefs: string[] = []) {
+  return checkDraft({ fields, slots, settings: { groupByFieldRefs } }).map((n) =>
+    noticeView(n, { fields, slots }),
+  );
+}
+
+describe('noticeView', () => {
+  it('offers a button for an empty field, blank slots and repeated dates, naming the field', () => {
+    const slots = [
+      slot('a', { what: 'Setup', date: '2030-11-14' }),
+      slot('b', { what: 'Till', date: '2030-11-14' }),
+      slot('d', { what: 'Setup', date: '2030-11-15' }),
+      slot('e', { what: 'Till', date: '2030-11-15' }),
+      slot('c', {}),
+    ];
+    expect(views([what, date, helper], slots).map(({ key, fix }) => ({ key, fix }))).toEqual([
+      {
+        key: 'empty_field:f_name',
+        fix: {
+          type: 'button',
+          label: 'Remove field',
+          name: 'Remove field “Volunteer name”',
+          request: { kind: 'empty_field', fieldId: 'f_name' },
+        },
+      },
+      {
+        key: 'blank_slot:c',
+        fix: {
+          type: 'button',
+          label: 'Remove it',
+          name: 'Remove it',
+          request: { kind: 'blank_slot', slotIds: ['c'] },
+        },
+      },
+      {
+        key: 'ungrouped_dates:f_date',
+        fix: {
+          type: 'button',
+          label: 'Group by “Date”',
+          name: 'Group by “Date”',
+          request: { kind: 'ungrouped_dates', fieldId: 'f_date' },
+        },
+      },
+    ]);
+  });
+
+  it('says "them" for several blank slots', () => {
+    const [blank] = views([what], [slot('a', { what: 'Setup' }), slot('b', {}), slot('c', {})]);
+    expect(blank?.fix).toMatchObject({ label: 'Remove them' });
+  });
+
+  it('offers a box for a field’s name', () => {
+    const untitled: DraftField = { id: 'f_u', ref: 'u', label: 'Untitled', fieldType: 'text' };
+    const [view] = views([what, untitled], [slot('a', { what: 'Setup', u: 'x' })]);
+    expect(view).toMatchObject({
+      kind: 'unnamed_field',
+      key: 'unnamed_field:f_u',
+      fix: { type: 'rename', fieldId: 'f_u', name: 'New name for the field “Untitled”' },
+    });
+  });
+
+  it('leaves the other kinds to the builder', () => {
+    const shown = views(
+      [what],
+      [slot('a', { what: 'TBD' }), slot('b', { what: 'Setup' }), slot('c', { what: 'Setup' }), slot('d', { what: '9am' })],
+    );
+    expect(shown.map((v) => v.kind)).toEqual(['placeholder', 'duplicate_slots', 'time_in_text']);
+    expect(shown.every((v) => v.fix === undefined)).toBe(true);
+    expect(shown.map((v) => v.key)).toEqual([
+      'placeholder:a',
+      'duplicate_slots:b',
+      'time_in_text:f_what',
+    ]);
+  });
+
+  it('keeps the words noticeText gives', () => {
+    const slots = [slot('a', { what: 'Setup' }), slot('b', {})];
+    expect(views([what], slots).map((v) => v.text)).toEqual(texts([what], slots));
+  });
+});
+
+describe('fixDoneText', () => {
+  const ctx = { fields: [what, date], slots: [] };
+
+  it('says what each fix did, by the field’s name', () => {
+    expect(fixDoneText({ kind: 'empty_field', fieldId: 'f_date', ref: 'date' }, ctx)).toBe(
+      'Removed “Date”.',
+    );
+    expect(fixDoneText({ kind: 'blank_slot', slotIds: ['a'] }, ctx)).toBe(
+      'Removed the empty slot.',
+    );
+    expect(fixDoneText({ kind: 'blank_slot', slotIds: ['a', 'b', 'c'] }, ctx)).toBe(
+      'Removed 3 empty slots.',
+    );
+    expect(fixDoneText({ kind: 'unnamed_field', fieldId: 'f_x' }, ctx, ' Shift ')).toBe(
+      'Named the field “Shift”.',
+    );
+    expect(fixDoneText({ kind: 'ungrouped_dates', fieldId: 'f_date', ref: 'date' }, ctx)).toBe(
+      'Grouped the slots by “Date”.',
+    );
+  });
+
+  it('never prints empty quotes for a field with no name', () => {
+    const blank: DraftField = { id: 'f_b', ref: 'b', label: ' ', fieldType: 'date' };
+    const noName = { fields: [blank], slots: [] };
+    expect(fixDoneText({ kind: 'empty_field', fieldId: 'f_b', ref: 'b' }, noName)).toBe(
+      'Removed the field with no name.',
+    );
+    expect(fixDoneText({ kind: 'ungrouped_dates', fieldId: 'f_b', ref: 'b' }, noName)).toBe(
+      'Grouped the slots by date.',
+    );
   });
 });

@@ -13,7 +13,7 @@ import {
   sharedValues,
   signupHeadline,
 } from '@/lib/signup-summary';
-import type { NoticeText } from '@/lib/draft-notices';
+import type { NoticeView } from '@/lib/draft-notices';
 import type { SlotFieldDefinition } from '@/schemas/slot-fields';
 import { AiDraftWarnings } from './AiDraftWarnings';
 import { ReviewCard } from './ReviewCard';
@@ -41,6 +41,7 @@ export function ReviewSlotsCard({
   showAll,
   builderHref,
   notices,
+  labelMaxLength,
 }: {
   signupId: string;
   fields: SlotFieldDefinition[];
@@ -48,8 +49,10 @@ export function ReviewSlotsCard({
   settings: unknown;
   showAll: boolean;
   builderHref: string;
-  /** What `checkDraft` found, in words, over every slot. */
-  notices: NoticeText[];
+  /** What `checkDraft` found, in words, over every slot, with their fixes. */
+  notices: NoticeView[];
+  /** The longest a field's name can be, for the box that names one. */
+  labelMaxLength: number;
 }) {
   const summary = { fields, slots, settings };
   const groupRef = groupByRef(settings);
@@ -77,7 +80,12 @@ export function ReviewSlotsCard({
         </p>
       ) : null}
       <AiDraftWarnings signupId={signupId} />
-      <ReviewNotices notices={notices} builderHref={builderHref} />
+      <ReviewNotices
+        signupId={signupId}
+        notices={notices}
+        builderHref={builderHref}
+        labelMaxLength={labelMaxLength}
+      />
       <div id="slots" className="flex scroll-mt-4 flex-col gap-3.5 pt-1">
         {groups.map((group, i) => {
           const fold = plan.groups[i];

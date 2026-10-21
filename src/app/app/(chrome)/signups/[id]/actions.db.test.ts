@@ -1,22 +1,28 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { and, eq } from 'drizzle-orm';
+import { and, asc, eq } from 'drizzle-orm';
 import { getDb } from '@/db/client';
 import { activity } from '@/db/schema/activity';
 import { workspaceMembers } from '@/db/schema/members';
 import { organizers } from '@/db/schema/organizers';
 import { signups } from '@/db/schema/signups';
+import { slots as slotsTable } from '@/db/schema/slots';
 import { workspaces } from '@/db/schema/workspaces';
 import { getEmailTransport } from '@/email';
 import { makeId } from '@/lib/ids';
 import type { Actor } from '@/lib/policy';
 import { chargeRateLimit, RateLimits } from '@/lib/rate-limit';
-import { DEFAULT_TEMPLATE } from '@/lib/signup-templates';
-import { createSignup } from '@/services/signups';
+import { DEFAULT_TEMPLATE, type SignupTemplate } from '@/lib/signup-templates';
+import type { DraftFixKind, DraftFixRequest, DraftFixUndo } from '@/schemas/draft-fixes';
+import { createSignup, publishSignup } from '@/services/signups';
+import { listFieldsForSignup, updateField } from '@/services/slot-fields';
+import { updateSlot } from '@/services/slots';
 import {
+  applyDraftFixAction,
   deleteSignupAction,
   emailDraftLinkAction,
   publishAction,
   setRequireEmailAction,
+  undoDraftFixAction,
 } from './actions';
 
 // The action reads the organizer from the session cookie. Tests hand it one
@@ -336,5 +342,347 @@ describe('publishAction (db)', () => {
 
     // A second click finds it open already: refused, so it stays where it was.
     await expect(publishAction(id)).resolves.toBeUndefined();
+  });
+});
+
+// The review page's one-tap fixes and Undo (#503), through the actions the
+// page calls, on drafts made for each test.
+describe('applyDraftFixAction and undoDraftFixAction (db)', () => {
+  const db = getDb();
+  const organizerId = makeId('org');
+  const workspaceId = makeId('ws');
+  const slug = `fix-${workspaceId.slice(-8).toLowerCase()}`;
+  const owner: Actor = {
+    kind: 'organizer',
+    id: organizerId,
+    email: `${slug}@example.test`,
+    workspaceIds: [workspaceId],
+    workspaceRoles: { [workspaceId]: 'owner' },
+  };
+  const viewer: Actor = {
+    kind: 'organizer',
+    id: makeId('org'),
+    email: 'viewer@example.test',
+    workspaceIds: [workspaceId],
+    workspaceRoles: { [workspaceId]: 'viewer' },
+  };
+
+  beforeAll(async () => {
+    await db.transaction(async (tx) => {
+      await tx.insert(organizers).values({ id: organizerId, email: owner.email });
+      await tx.insert(workspaces).values({
+        id: workspaceId,
+        slug,
+        name: 'Fix Test',
+        type: 'personal',
+        plan: 'free',
+      });
+    });
+  });
+
+  afterAll(async () => {
+    await db.delete(workspaces).where(eq(workspaces.id, workspaceId));
+    await db.delete(organizers).where(eq(organizers.id, organizerId));
+  });
+
+  beforeEach(() => {
+    session.actor = owner;
+    revalidatePath.mockClear();
+  });
+
+  const text = (ref: string, label: string, sortOrder: number) =>
+    ({
+      ref,
+      label,
+      fieldType: 'text',
+      sortOrder,
+      config: { fieldType: 'text', maxLength: 200 },
+    }) as const;
+  const dateField = (ref: string, label: string, sortOrder: number) =>
+    ({ ref, label, fieldType: 'date', sortOrder, config: { fieldType: 'date' } }) as const;
+
+  /** Everything a fix or its undo can touch, by position, without ids. */
+  async function snapshot(signupId: string) {
+    const [row] = await db
+      .select({ settings: signups.settings, status: signups.status })
+      .from(signups)
+      .where(eq(signups.id, signupId));
+    const fields = await listFieldsForSignup(db, signupId);
+    const slots = await db
+      .select()
+      .from(slotsTable)
+      .where(eq(slotsTable.signupId, signupId))
+      .orderBy(asc(slotsTable.sortOrder), asc(slotsTable.slotAt), asc(slotsTable.createdAt));
+    return {
+      status: row?.status,
+      settings: row?.settings as Record<string, unknown>,
+      fields: fields.map(({ ref, label, fieldType, sortOrder, config }) => ({
+        ref,
+        label,
+        fieldType,
+        sortOrder,
+        config,
+      })),
+      slots: slots.map((s) => ({
+        values: s.values,
+        capacity: s.capacity,
+        sortOrder: s.sortOrder,
+        status: s.status,
+        slotAt: s.slotAt?.toISOString() ?? null,
+      })),
+      // With ids, to show a refused fix changed nothing at all.
+      ids: { fields: fields.map((f) => f.id), slots: slots.map((s) => s.id) },
+    };
+  }
+  type Snapshot = Awaited<ReturnType<typeof snapshot>>;
+  const withoutIds = ({ ids: _ids, ...rest }: Snapshot) => rest;
+
+  async function events(
+    signupId: string,
+    eventType: 'review.notice_accepted' | 'review.fix_undone',
+  ) {
+    const rows = await db
+      .select({ payload: activity.payload, actorId: activity.actorId })
+      .from(activity)
+      .where(and(eq(activity.signupId, signupId), eq(activity.eventType, eventType)));
+    return rows;
+  }
+
+  interface Scenario {
+    template: SignupTemplate['fields'];
+    slots: SignupTemplate['slots'];
+    settings?: Record<string, unknown>;
+    /** Anything the template can't say, such as a closed slot. */
+    setup?: (s: Snapshot) => Promise<void>;
+    request: (s: Snapshot) => DraftFixRequest;
+    done: string;
+    /** What the fix changed. */
+    fixed: (after: Snapshot) => void;
+  }
+
+  const SCENARIOS: Record<DraftFixKind, Scenario> = {
+    // An empty date field that both anchors reminders and groups the page.
+    empty_field: {
+      template: [
+        text('what', 'What', 0),
+        dateField('when', 'When', 1),
+        dateField('date', 'Date', 2),
+      ],
+      slots: [
+        { capacity: 1, values: { what: 'Setup', date: '2030-11-14' }, sortOrder: 0 },
+        { capacity: 1, values: { what: 'Till', date: '2030-11-15' }, sortOrder: 1 },
+      ],
+      settings: { groupByFieldRefs: ['when'], reminderFromFieldRef: 'when' },
+      request: (s) => ({ kind: 'empty_field', fieldId: s.ids.fields[1]! }),
+      done: 'Removed “When”.',
+      fixed: (after) => {
+        expect(after.fields.map((f) => f.ref)).toEqual(['what', 'date']);
+        expect(after.settings.groupByFieldRefs).toEqual([]);
+        expect(after.settings.reminderFromFieldRef).toBe('date');
+        expect(after.slots.map((s) => s.slotAt)).toEqual([
+          '2030-11-14T12:00:00.000Z',
+          '2030-11-15T12:00:00.000Z',
+        ]);
+      },
+    },
+    // Two blank slots between filled ones, one of them closed.
+    blank_slot: {
+      template: [text('what', 'What', 0), dateField('date', 'Date', 1)],
+      slots: [
+        { capacity: 1, values: { what: 'Setup', date: '2030-11-14' }, sortOrder: 0 },
+        { capacity: null, values: {}, sortOrder: 1 },
+        { capacity: 2, values: { what: 'Till' }, sortOrder: 2 },
+        { capacity: 3, values: { what: '' }, sortOrder: 3 },
+      ],
+      setup: async (s) => {
+        const closed = await updateSlot(db, owner, s.ids.slots[3]!, { status: 'closed' });
+        if (!closed.ok) throw new Error(closed.error.message);
+      },
+      request: (s) => ({ kind: 'blank_slot', slotIds: [s.ids.slots[1]!, s.ids.slots[3]!] }),
+      done: 'Removed 2 empty slots.',
+      fixed: (after) => {
+        expect(after.slots.map((s) => s.values)).toEqual([
+          { what: 'Setup', date: '2030-11-14' },
+          { what: 'Till' },
+        ]);
+      },
+    },
+    unnamed_field: {
+      template: [text('what', 'What', 0), text('role', 'Untitled', 1)],
+      slots: [{ capacity: 1, values: { what: 'Setup', role: 'Lead' }, sortOrder: 0 }],
+      request: (s) => ({
+        kind: 'unnamed_field',
+        fieldId: s.ids.fields[1]!,
+        label: '  Shift lead ',
+      }),
+      done: 'Named the field “Shift lead”.',
+      fixed: (after) => {
+        expect(after.fields.map((f) => f.label)).toEqual(['What', 'Shift lead']);
+      },
+    },
+    ungrouped_dates: {
+      template: [text('what', 'What', 0), dateField('date', 'Date', 1)],
+      slots: [
+        { capacity: 1, values: { what: 'Setup', date: '2030-11-14' }, sortOrder: 0 },
+        { capacity: 1, values: { what: 'Till', date: '2030-11-14' }, sortOrder: 1 },
+        { capacity: 1, values: { what: 'Setup', date: '2030-11-15' }, sortOrder: 2 },
+        { capacity: 1, values: { what: 'Till', date: '2030-11-15' }, sortOrder: 3 },
+      ],
+      request: (s) => ({ kind: 'ungrouped_dates', fieldId: s.ids.fields[1]! }),
+      done: 'Grouped the slots by “Date”.',
+      fixed: (after) => {
+        expect(after.settings.groupByFieldRefs).toEqual(['date']);
+      },
+    },
+  };
+
+  async function draftFor(scenario: Scenario): Promise<{ id: string; before: Snapshot }> {
+    const created = await createSignup(
+      db,
+      owner,
+      workspaceId,
+      {
+        title: 'Fix test',
+        description: '',
+        tags: [],
+        visibility: 'unlisted',
+        settings: scenario.settings ?? {},
+      },
+      { template: { id: 'test', fields: [...scenario.template], slots: scenario.slots } },
+    );
+    if (!created.ok) throw new Error(created.error.message);
+    const id = created.value.id;
+    await scenario.setup?.(await snapshot(id));
+    return { id, before: await snapshot(id) };
+  }
+
+  for (const [kind, scenario] of Object.entries(SCENARIOS) as [DraftFixKind, Scenario][]) {
+    describe(kind, () => {
+      it('fixes it and logs the kind; Undo puts back everything it changed', async () => {
+        const { id, before } = await draftFor(scenario);
+
+        const applied = await applyDraftFixAction(id, scenario.request(before));
+        if ('error' in applied) throw new Error(applied.error);
+        expect(applied.done).toBe(scenario.done);
+        expect(applied.undo.kind).toBe(kind);
+        expect(revalidatePath).toHaveBeenCalledWith(`/app/signups/${id}`, 'layout');
+        scenario.fixed(await snapshot(id));
+        expect(await events(id, 'review.notice_accepted')).toEqual([
+          { payload: { kind }, actorId: organizerId },
+        ]);
+
+        // The undo goes to the browser and back as plain data.
+        const undo = JSON.parse(JSON.stringify(applied.undo)) as DraftFixUndo;
+        revalidatePath.mockClear();
+        expect(await undoDraftFixAction(id, undo)).toBeNull();
+        expect(revalidatePath).toHaveBeenCalledWith(`/app/signups/${id}`, 'layout');
+        expect(withoutIds(await snapshot(id))).toEqual(withoutIds(before));
+        expect(await events(id, 'review.fix_undone')).toEqual([
+          { payload: { kind }, actorId: organizerId },
+        ]);
+      });
+
+      it('changes nothing for a problem already fixed', async () => {
+        const { id, before } = await draftFor(scenario);
+        const request = scenario.request(before);
+        const first = await applyDraftFixAction(id, request);
+        expect(first).not.toHaveProperty('error');
+        const fixed = await snapshot(id);
+        revalidatePath.mockClear();
+
+        // A second tap, a stale page, or an AI assistant that got there first.
+        expect(await applyDraftFixAction(id, request)).toEqual({
+          error: 'That changed since you opened this page, so nothing was done.',
+        });
+        expect(await snapshot(id)).toEqual(fixed);
+        expect(await events(id, 'review.notice_accepted')).toHaveLength(1);
+        // The page comes back as it is now.
+        expect(revalidatePath).toHaveBeenCalled();
+      });
+
+      it('refuses a viewer in plain words and changes nothing', async () => {
+        const { id, before } = await draftFor(scenario);
+        session.actor = viewer;
+        expect(await applyDraftFixAction(id, scenario.request(before))).toEqual({
+          error: 'You don’t have edit access.',
+        });
+        expect(await snapshot(id)).toEqual(before);
+        expect(await events(id, 'review.notice_accepted')).toHaveLength(0);
+        expect(revalidatePath).not.toHaveBeenCalled();
+      });
+
+      it('refuses a signup that is published', async () => {
+        const { id, before } = await draftFor(scenario);
+        const published = await publishSignup(db, owner, id);
+        if (!published.ok) throw new Error(published.error.message);
+        expect(await applyDraftFixAction(id, scenario.request(before))).toEqual({
+          error: 'This signup isn’t a draft any more. Change it in the builder.',
+        });
+        expect(await snapshot(id)).toEqual({ ...before, status: 'open' });
+        expect(await events(id, 'review.notice_accepted')).toHaveLength(0);
+        expect(revalidatePath).not.toHaveBeenCalled();
+      });
+    });
+  }
+
+  it('won’t undo a field renamed again since, and says so', async () => {
+    const scenario = SCENARIOS.unnamed_field;
+    const { id, before } = await draftFor(scenario);
+    const applied = await applyDraftFixAction(id, scenario.request(before));
+    if ('error' in applied) throw new Error(applied.error);
+    const renamed = await updateField(db, owner, before.ids.fields[1]!, { label: 'Role' });
+    if (!renamed.ok) throw new Error(renamed.error.message);
+    const changed = await snapshot(id);
+
+    expect(await undoDraftFixAction(id, applied.undo)).toEqual({
+      error: 'That changed again since, so it can’t be undone.',
+    });
+    expect(await snapshot(id)).toEqual(changed);
+    expect(await events(id, 'review.fix_undone')).toHaveLength(0);
+  });
+
+  it('won’t undo on another signup, or after the signup is published', async () => {
+    const scenario = SCENARIOS.unnamed_field;
+    const { id, before } = await draftFor(scenario);
+    const other = await draftFor(scenario);
+    const applied = await applyDraftFixAction(id, scenario.request(before));
+    if ('error' in applied) throw new Error(applied.error);
+
+    // The undo names a field of the first signup, which the second lacks.
+    expect(await undoDraftFixAction(other.id, applied.undo)).toEqual({
+      error: 'That changed again since, so it can’t be undone.',
+    });
+    expect(await snapshot(other.id)).toEqual(other.before);
+
+    const published = await publishSignup(db, owner, id);
+    if (!published.ok) throw new Error(published.error.message);
+    const open = await snapshot(id);
+    expect(await undoDraftFixAction(id, applied.undo)).toEqual({
+      error: 'This signup isn’t a draft any more. Change it in the builder.',
+    });
+    expect(await snapshot(id)).toEqual(open);
+  });
+
+  it('refuses a name that is blank or still the default, and keeps the field as it was', async () => {
+    const scenario = SCENARIOS.unnamed_field;
+    const { id, before } = await draftFor(scenario);
+    const fieldId = before.ids.fields[1]!;
+    expect(await applyDraftFixAction(id, { kind: 'unnamed_field', fieldId, label: '   ' })).toEqual(
+      { error: 'Type a name for the field.' },
+    );
+    expect(
+      await applyDraftFixAction(id, { kind: 'unnamed_field', fieldId, label: ' untitled ' }),
+    ).toEqual({ error: 'Give it a name other than “Untitled”.' });
+    expect(await snapshot(id)).toEqual(before);
+    expect(await events(id, 'review.notice_accepted')).toHaveLength(0);
+  });
+
+  it('refuses an undo it can’t read, and changes nothing', async () => {
+    const scenario = SCENARIOS.ungrouped_dates;
+    const { id, before } = await draftFor(scenario);
+    expect(
+      await undoDraftFixAction(id, { kind: 'ungrouped_dates', ref: '' } as unknown as DraftFixUndo),
+    ).toEqual({ error: 'That changed again since, so it can’t be undone.' });
+    expect(await snapshot(id)).toEqual(before);
   });
 });

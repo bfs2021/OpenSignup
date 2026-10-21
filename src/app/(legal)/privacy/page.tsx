@@ -65,8 +65,9 @@ export default function PrivacyPage() {
             went, a publish or an AI draft that didn&rsquo;t go through), which of your own pages
             you open and whether on a phone or a computer (never the browser&rsquo;s full
             identifying string), which kinds of problem the review page pointed out in a draft
-            (never the values themselves), participant commitments on your signups, reminder
-            dispatches, the emails we send you about a draft, and turning those emails off or on.
+            and which of its one-tap fixes you took or undid (never the values themselves),
+            participant commitments on your signups, reminder dispatches, the emails we send you
+            about a draft, and turning those emails off or on.
             This exists so an organizer can audit what happened in their own workspace, so the
             operator can investigate abuse, and so the operator can count, in aggregate, where
             organizers get stuck between starting a signup and sharing it. The same log records
