@@ -152,9 +152,32 @@ test.describe('help: create and publish your first signup', () => {
 
     await page.getByRole('button', { name: UI.publish, exact: true }).click();
     await page.waitForURL(/\/share$/);
-    await expect(page.getByRole('heading', { name: UI.shareHeading })).toBeVisible();
+    const shareHeading = page.getByRole('heading', { name: UI.shareHeading });
+    await expect(shareHeading).toBeVisible();
+    const copyLink = page.getByRole('button', { name: UI.copyLink });
+    if (CAPTURE) {
+      // The stand-in address again; Copy link still copies the real one.
+      await page
+        .locator('main p.font-mono')
+        .evaluate(
+          (el) => (el.textContent = 'https://your-site.example/s/snack-duty-spring-season'),
+        );
+      // From the heading down to the buttons: the message and QR code below
+      // are described in words.
+      const [h, b] = await Promise.all([shareHeading.boundingBox(), copyLink.boundingBox()]);
+      if (!h || !b) throw new Error('share heading or Copy link not on screen');
+      const pad = 16;
+      // The tick sits 60px above the heading (48px icon, 12px gap).
+      const top = h.y - 60 - pad;
+      await page.waitForTimeout(300);
+      await page.screenshot({
+        path: `${SHOT_DIR}/share-step.png`,
+        clip: { x: b.x - pad, y: top, width: b.width + 2 * pad, height: b.y + b.height + pad - top },
+        animations: 'disabled',
+      });
+    }
 
-    await page.getByRole('button', { name: UI.copyLink }).click();
+    await copyLink.click();
     const clipboard = () => page.evaluate(() => navigator.clipboard.readText());
     await expect.poll(clipboard).toMatch(/\/s\/snack-duty-spring-season/);
     const copied = await clipboard();

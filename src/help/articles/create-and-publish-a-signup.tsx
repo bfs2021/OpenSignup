@@ -180,6 +180,12 @@ export function CreateAndPublishASignup() {
             <p>
               You&apos;ll see <Ui>{UI.shareHeading}</Ui>
             </p>
+            <Screenshot
+              src="/help/create-and-publish-a-signup/share-step.png"
+              alt="It's live. Now send the link: the signup's name, its link, and a Copy link button."
+              width={592}
+              height={294}
+            />
           </Step>
           <Step>
             <p>
