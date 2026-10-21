@@ -1,5 +1,6 @@
-import { and, eq, sql, type Column } from 'drizzle-orm';
+import { and, desc, eq, inArray, sql, type Column } from 'drizzle-orm';
 import type { Db, Tx } from '@/db/client';
+import { activity } from '@/db/schema/activity';
 import { commitments } from '@/db/schema/commitments';
 import { slots } from '@/db/schema/slots';
 import { activityActor, recordActivity } from '@/lib/activity';
@@ -292,6 +293,31 @@ export async function unmergeSlots(
             expected: merged === null ? 'no limit' : String(merged),
           },
         ),
+      );
+    }
+    // Undone already: a kept slot with no limit has no limit before the merge
+    // and after its undo alike, so the capacity check above can't tell a
+    // second undo (its answer lost, say) from the first. The log can, as
+    // `reminder.sent` stops a second reminder: read under the signup lock, so
+    // two undos at once take turns and the second finds the first's row.
+    const [latest] = await tx
+      .select({ eventType: activity.eventType })
+      .from(activity)
+      .where(
+        and(
+          eq(activity.signupId, signupId),
+          inArray(activity.eventType, ['slot.merged', 'slot.unmerged']),
+          sql`${activity.payload} ->> 'slotId' = ${keepSlotId}`,
+        ),
+      )
+      .orderBy(desc(activity.occurredAt))
+      .limit(1);
+    if (latest?.eventType === 'slot.unmerged') {
+      return err(
+        serviceError('conflict', 'this merge has been undone already', {
+          field: 'keepSlotId',
+          received: keepSlotId,
+        }),
       );
     }
     const booked = await refuseCommitments(tx, workspaceId, [keepSlotId], 'keepSlotId');

@@ -630,4 +630,46 @@ describe('unmergeSlots (db)', () => {
     expect(await shown(fx, signupId)).toEqual(before);
     expect(await events(fx, signupId, 'slot.unmerged')).toHaveLength(1);
   });
+
+  // With no limit, the kept slot reads the same before the merge and after its
+  // undo, so only the log can tell a second undo from the first.
+  const unlimited: Row[] = [
+    { role: 'Helper', capacity: null },
+    { role: 'Helper', capacity: null },
+    { role: 'Helper', capacity: null },
+  ];
+
+  it('refuses an undo of copies with no limit that was undone already', async () => {
+    const { signupId, before, merge } = await merged('Unmerge twice', unlimited, 0, [0, 1, 2]);
+    const first = await unmergeSlots(fx.db, fx.actor, signupId, merge.undo);
+    expect(first.ok, JSON.stringify(first)).toBe(true);
+    const second = await unmergeSlots(fx.db, fx.actor, signupId, merge.undo);
+    expect(second.ok).toBe(false);
+    if (!second.ok) expect(second.error).toMatchObject({ code: 'conflict', field: 'keepSlotId' });
+    expect(await shown(fx, signupId)).toEqual(before);
+    expect(await events(fx, signupId, 'slot.unmerged')).toHaveLength(1);
+  });
+
+  it('puts copies with no limit back once when the same undo is sent twice at once', async () => {
+    const { signupId, before, merge } = await merged('Unmerge tap tap', unlimited, 0, [0, 1, 2]);
+    const results = await Promise.all([
+      unmergeSlots(fx.db, fx.actor, signupId, merge.undo),
+      unmergeSlots(fx.db, fx.actor, signupId, merge.undo),
+    ]);
+    expect(results.filter((r) => r.ok)).toHaveLength(1);
+    expect(await shown(fx, signupId)).toEqual(before);
+    expect(await events(fx, signupId, 'slot.unmerged')).toHaveLength(1);
+  });
+
+  it('undoes a merge made again after an undo', async () => {
+    const { signupId, ids, before, merge } = await merged('Merge again', unlimited, 0, [0, 1, 2]);
+    expect((await unmergeSlots(fx.db, fx.actor, signupId, merge.undo)).ok).toBe(true);
+    const slotIds = (await listSlotsForSignup(fx.db, signupId)).map((s) => s.id);
+    const again = await mergeSlots(fx.db, fx.actor, signupId, { keepSlotId: ids[0]!, slotIds });
+    expect(again.ok, JSON.stringify(again)).toBe(true);
+    if (!again.ok) return;
+    const r = await unmergeSlots(fx.db, fx.actor, signupId, again.value.undo);
+    expect(r.ok, JSON.stringify(r)).toBe(true);
+    expect(await shown(fx, signupId)).toEqual(before);
+  });
 });
