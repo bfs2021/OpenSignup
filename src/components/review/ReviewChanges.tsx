@@ -8,9 +8,14 @@ import {
   useRef,
   useState,
   useTransition,
+  type FormEvent,
   type ReactNode,
 } from 'react';
-import { removeDayAction, undoDraftFixAction } from '@/app/app/(chrome)/signups/[id]/actions';
+import {
+  removeDayAction,
+  setCapacityAction,
+  undoDraftFixAction,
+} from '@/app/app/(chrome)/signups/[id]/actions';
 import { FormError } from '@/components/ui/form-error';
 import { Spinner } from '@/components/ui/spinner';
 import type { DraftFixUndo, RemoveDayRequest } from '@/schemas/draft-fixes';
@@ -19,11 +24,11 @@ export const FIX_BUTTON_CLASS =
   'inline-flex h-9 shrink-0 items-center gap-2 rounded-lg border border-brand/30 bg-white px-3.5 text-[13px] font-semibold text-brand transition hover:bg-brand-soft/40 disabled:cursor-not-allowed disabled:opacity-70';
 
 /**
- * A change's answer: what it did and its undo, or why it was refused.
- * Nothing when the action sent the browser elsewhere, such as to sign in
- * again.
+ * A change's answer: what it did and its undo (null when nothing was done),
+ * or why it was refused. Nothing when the action sent the browser elsewhere,
+ * such as to sign in again.
  */
-type Answer = { done: string; undo: DraftFixUndo } | { error: string } | undefined;
+type Answer = { done: string; undo: DraftFixUndo | null } | { error: string } | undefined;
 
 /** What the last change did, and its Undo until that's used or refused. */
 interface LastChange {
@@ -86,9 +91,11 @@ export function BusySpinner({ show }: { show: boolean }) {
 
 /**
  * The review page's slots card, for the changes made on it: the notices'
- * one-tap fixes (`NoticeFixes`) and Remove day (`RemoveDayButton`, below).
- * It holds what the last change did and Undo for it, on one line above the
- * notices, so a Remove day replaces a fix's Undo and the other way round.
+ * one-tap fixes (`NoticeFixes`), Remove day (`RemoveDayButton`, below) and
+ * "People for each slot" (`PeopleForEachSlot`, below, in `header`, which
+ * shows above the line). It holds what the last change did and Undo for it,
+ * on one line above the notices, so a Remove day replaces a fix's Undo and
+ * the other way round.
  * The page comes back from the server with each change, so this holds no
  * copy of the signup: only the last change's undo, until the next change
  * replaces it. That line stays when the notices empty, so the last change
@@ -101,10 +108,19 @@ export function BusySpinner({ show }: { show: boolean }) {
  * changes would go with its row.
  *
  * After a change, focus goes to Undo, as the button pressed has gone with
- * its notice or its day; after Undo, to the line. What's inside stays as
- * the server drew it.
+ * its notice or its day; after Undo, or a change that did nothing, to the
+ * line. What's inside stays as the server drew it.
  */
-export function ReviewChanges({ signupId, children }: { signupId: string; children: ReactNode }) {
+export function ReviewChanges({
+  signupId,
+  header,
+  children,
+}: {
+  signupId: string;
+  /** Shown above the line: the card's headline, with "People for each slot". */
+  header?: ReactNode;
+  children: ReactNode;
+}) {
   const [pending, startTransition] = useTransition();
   // The control whose change is in flight, or 'undo'. Read only while pending.
   const [busyKey, setBusyKey] = useState<string | null>(null);
@@ -151,7 +167,7 @@ export function ReviewChanges({ signupId, children }: { signupId: string; childr
           setRefusal({ text: result.error, key: own ? key : null });
           return;
         }
-        focusNext.current = 'undo';
+        focusNext.current = result.undo ? 'undo' : 'status';
         setLast({ text: result.done, undo: result.undo });
       });
     });
@@ -187,6 +203,7 @@ export function ReviewChanges({ signupId, children }: { signupId: string; childr
     <ReviewChangeContext.Provider
       value={{ pending, busy, change, refusalFor, release, registerBeforeChange }}
     >
+      {header}
       {/* Out of the card's flow while empty, so it adds no gap, but always
           there, so what a change did is read out as it appears. */}
       <div ref={status} role="status" tabIndex={-1} className={last ? 'outline-none' : 'sr-only'}>
@@ -234,15 +251,8 @@ export function RemoveDayButton({
   request: RemoveDayRequest;
   name: string;
 }) {
-  const { pending, busy, change, refusalFor, release } = useReviewChange();
+  const { pending, busy, change } = useReviewChange();
   const key = `remove_day:${request.value}`;
-  const refusal = refusalFor(key);
-  const alert = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (refusal) alert.current?.focus();
-  }, [refusal]);
-  useEffect(() => () => release(key), [release, key]);
 
   return (
     <div className="flex flex-col items-end gap-2">
@@ -264,11 +274,109 @@ export function RemoveDayButton({
         <BusySpinner show={busy(key)} />
         Remove day
       </button>
-      {refusal ? (
-        <div ref={alert} tabIndex={-1} className="self-stretch outline-none">
-          <FormError>{refusal.text}</FormError>
-        </div>
-      ) : null}
+      <OwnRefusal control={key} />
     </div>
   );
+}
+
+const PEOPLE_EACH = 'set_capacity';
+
+/**
+ * "People for each slot", beside the headline over the review page's slots
+ * (issue #504): a number box and Set, which gives every slot of the draft
+ * that many people at once, and says so with Undo on the card's line for its
+ * changes. A refusal shows here, under the box, and takes focus, as Remove
+ * day's does.
+ *
+ * The box starts with the number every slot takes when they all take the
+ * same one (`shared`), and empty otherwise. It takes a whole number, 1 or
+ * more: no limit is set slot by slot. `fingerprint` stands for every slot the
+ * page showed, so nothing is set on slots the organizer didn't see; `max` is
+ * the most a slot can take, passed in so this doesn't load the schema. One
+ * per page, so its box has a fixed id.
+ */
+export function PeopleForEachSlot({
+  signupId,
+  fingerprint,
+  shared,
+  max,
+}: {
+  signupId: string;
+  fingerprint: string;
+  shared: number | null;
+  max: number;
+}) {
+  const { pending, busy, change } = useReviewChange();
+
+  function submit(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    // The server says what's wrong with anything that isn't a whole number.
+    const capacity = Number(new FormData(e.currentTarget).get('capacity'));
+    change(
+      PEOPLE_EACH,
+      () => setCapacityAction(signupId, { kind: 'set_capacity', capacity, fingerprint }),
+      'Couldn’t set that. Try again.',
+      true,
+    );
+  }
+
+  return (
+    <div className="flex min-w-0 flex-col gap-2">
+      <form onSubmit={submit} className="flex flex-wrap items-center gap-x-2 gap-y-1.5">
+        <label htmlFor="people-each" className="text-[13px] text-ink-muted">
+          People for each slot
+        </label>
+        <span className="flex gap-2">
+          <input
+            // Starts again from what the page now shows once it comes back
+            // changed, as after Undo.
+            key={shared ?? ''}
+            id="people-each"
+            name="capacity"
+            type="number"
+            inputMode="numeric"
+            required
+            min={1}
+            max={max}
+            step={1}
+            defaultValue={shared ?? ''}
+            className="h-9 w-20 rounded-lg border border-surface-sunk bg-white px-2.5 text-base text-ink focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand sm:text-[14px]"
+          />
+          <button
+            type="submit"
+            aria-busy={busy(PEOPLE_EACH)}
+            disabled={pending}
+            className={FIX_BUTTON_CLASS}
+          >
+            <BusySpinner show={busy(PEOPLE_EACH)} />
+            Set
+          </button>
+        </span>
+      </form>
+      <OwnRefusal control={PEOPLE_EACH} />
+    </div>
+  );
+}
+
+/**
+ * Why the change the control `control` made was refused, under that control
+ * (a change made with `own`), taking focus as it appears, so it isn't missed
+ * at the top of a long card. Rendered with the control: once the control is
+ * gone, the refusal moves to the card's line.
+ */
+function OwnRefusal({ control }: { control: string }) {
+  const { refusalFor, release } = useReviewChange();
+  const refusal = refusalFor(control);
+  const alert = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (refusal) alert.current?.focus();
+  }, [refusal]);
+  useEffect(() => () => release(control), [release, control]);
+
+  return refusal ? (
+    <div ref={alert} tabIndex={-1} className="self-stretch outline-none">
+      <FormError>{refusal.text}</FormError>
+    </div>
+  ) : null;
 }

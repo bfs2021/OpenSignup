@@ -13,13 +13,14 @@ import {
   sharedValues,
   signupHeadline,
 } from '@/lib/signup-summary';
-import { removableDays, removeDayRequest } from '@/lib/draft-fixes';
+import { capacityOffer, removableDays, removeDayRequest } from '@/lib/draft-fixes';
 import type { NoticeView } from '@/lib/draft-notices';
 import type { SlotFieldDefinition } from '@/schemas/slot-fields';
+import { MAX_CAPACITY } from '@/schemas/slots';
 import { toBuildFields } from '@/components/build-shared/buildFields';
 import { AiDraftWarnings } from './AiDraftWarnings';
 import { ReviewCard } from './ReviewCard';
-import { RemoveDayButton, ReviewChanges } from './ReviewChanges';
+import { PeopleForEachSlot, RemoveDayButton, ReviewChanges } from './ReviewChanges';
 import { ReviewNotices } from './ReviewNotices';
 import { ReviewSlotEditing, ReviewSlotRow } from './ReviewSlotRow';
 
@@ -38,8 +39,10 @@ interface ReviewSlot {
  * "Show all" is a link that renders the page again with everything open.
  * Each row is a button that opens the builder's slot editor under it
  * (`ReviewSlotRow`), and on a page grouped by date each day has Remove day;
- * anything bigger is done in the builder. The notices' fixes and Remove day
- * share one line for what the last of them did, with Undo (`ReviewChanges`).
+ * beside the headline, "People for each slot" gives every slot the same
+ * number; anything bigger is done in the builder. The notices' fixes, Remove
+ * day and "People for each slot" share one line for what the last of them
+ * did, with Undo (`ReviewChanges`).
  */
 export function ReviewSlotsCard({
   signupId,
@@ -78,6 +81,7 @@ export function ReviewSlotsCard({
   const pause = <span className="sr-only">, </span>;
   // By group key. None unless the page is grouped by a date field.
   const days = new Map(removableDays(summary).map((d) => [d.value, d]));
+  const peopleEach = capacityOffer(slots);
 
   return (
     <ReviewCard
@@ -85,14 +89,30 @@ export function ReviewSlotsCard({
       headingId="review-slots"
       attention={notices.length > 0}
     >
-      <p className="text-base font-semibold">{signupHeadline(summary)}</p>
-      {shared.length > 0 ? (
-        <p className="text-sm text-ink-muted">
-          Same on every slot: {shared.map((v) => v.text).join(' · ')}
-        </p>
-      ) : null}
-      <AiDraftWarnings signupId={signupId} />
-      <ReviewChanges signupId={signupId}>
+      <ReviewChanges
+        signupId={signupId}
+        header={
+          <>
+            <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
+              <p className="text-base font-semibold">{signupHeadline(summary)}</p>
+              {peopleEach ? (
+                <PeopleForEachSlot
+                  signupId={signupId}
+                  fingerprint={peopleEach.fingerprint}
+                  shared={peopleEach.shared}
+                  max={MAX_CAPACITY}
+                />
+              ) : null}
+            </div>
+            {shared.length > 0 ? (
+              <p className="text-sm text-ink-muted">
+                Same on every slot: {shared.map((v) => v.text).join(' · ')}
+              </p>
+            ) : null}
+            <AiDraftWarnings signupId={signupId} />
+          </>
+        }
+      >
         <ReviewNotices
           signupId={signupId}
           notices={notices}

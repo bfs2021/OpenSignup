@@ -43,6 +43,10 @@ export const UI = {
   // In each date's group on that page, when the slots are grouped by date.
   // Its name for screen readers adds the date: "Remove day: Sat, Apr 6".
   removeDay: 'Remove day',
+  // Beside the headline over the slots on that page, from two slots: the box
+  // for how many people every slot takes, and its button.
+  peopleEach: 'People for each slot',
+  setPeopleEach: 'Set',
   editInBuilder: 'Edit everything in the builder',
   publishFromReview: 'Publish and get the link',
   // Under those two: sends the email about an unpublished draft now.

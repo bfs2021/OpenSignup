@@ -476,6 +476,72 @@ test.describe('help: create and publish your first signup', () => {
     await expect(cups).toBeVisible();
   });
 
+  test('every slot can be given the same number of spots on the review page, and undone', async ({
+    page,
+    context,
+    isMobile,
+  }) => {
+    test.skip(isMobile, 'the same steps on a phone');
+    await loginAsSeededOrganizer(context);
+    const created = await page.request.post('/api/signups', {
+      data: {
+        title: `Review spots ${Date.now()}`,
+        description: '',
+        tags: [],
+        visibility: 'unlisted',
+        settings: {},
+      },
+    });
+    expect(created.ok()).toBe(true);
+    const id = (await created.json()).data.id as string;
+    // Without the template's empty slot.
+    const template = (await (await page.request.get(`/api/signups/${id}`)).json()).data
+      .slots as { id: string }[];
+    for (const { id: slotId } of template) {
+      expect((await page.request.delete(`/api/slots/${slotId}`)).ok()).toBe(true);
+    }
+    // Three slots, each for a different number of people.
+    const slots = [
+      { what: 'Fruit and water', capacity: 1, people: '1 person' },
+      { what: 'Napkins', capacity: 2, people: '2 people' },
+      { what: 'Cups', capacity: 3, people: '3 people' },
+    ];
+    for (const { what, capacity } of slots) {
+      const added = await page.request.post(`/api/signups/${id}/slots`, {
+        data: { values: { what, date: '2030-04-06' }, capacity },
+      });
+      expect(added.ok()).toBe(true);
+    }
+
+    await page.goto(`/app/signups/${id}`);
+    await expect(page.getByRole('heading', { name: UI.reviewHeading })).toBeVisible();
+    const row = (what: string) => page.getByRole('button', { name: `Edit slot — ${what}` });
+    const box = page.getByRole('spinbutton', { name: UI.peopleEach });
+    // The slots differ, so the box starts empty.
+    await expect(box).toHaveValue('');
+
+    // "To give every slot the same number of spots, type the number in People
+    // for each slot, above your slots. Then choose Set."
+    await box.fill('4');
+    await page.getByRole('button', { name: UI.setPeopleEach, exact: true }).click();
+    await expect(page.getByText('Set every slot to 4 people.')).toBeVisible();
+    for (const { what } of slots) await expect(row(what)).toContainText('4 people');
+    await expect(page.getByText('3 slots · 1 day · 4 people each')).toBeVisible();
+    await expect(box).toHaveValue('4');
+
+    // "Right after, Undo puts back what each slot had."
+    const undo = page.getByRole('button', { name: UI.undo, exact: true });
+    await expect(undo).toBeFocused();
+    await undo.click();
+    await expect(page.getByText('Undone.')).toBeVisible();
+    await expect(undo).toHaveCount(0);
+    for (const { what, people } of slots) await expect(row(what)).toContainText(people);
+    // Saved, not only shown.
+    await page.reload();
+    for (const { what, people } of slots) await expect(row(what)).toContainText(people);
+    await expect(box).toHaveValue('');
+  });
+
   test('copies of a slot can be merged into one on the review page, and undone', async ({
     page,
     context,

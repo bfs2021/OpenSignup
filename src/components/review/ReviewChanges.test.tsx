@@ -7,12 +7,13 @@ import type { BuildField } from '@/components/build-shared/useBuildState';
 import type { NoticeView } from '@/lib/draft-notices';
 import type { DraftFixUndo, RemoveDayRequest } from '@/schemas/draft-fixes';
 import { NoticeFixes } from './NoticeFixes';
-import { RemoveDayButton, ReviewChanges } from './ReviewChanges';
+import { PeopleForEachSlot, RemoveDayButton, ReviewChanges } from './ReviewChanges';
 import { ReviewSlotEditing, ReviewSlotRow } from './ReviewSlotRow';
 
 const actions = vi.hoisted(() => ({
   applyDraftFixAction: vi.fn(),
   removeDayAction: vi.fn(),
+  setCapacityAction: vi.fn(),
   undoDraftFixAction: vi.fn(),
 }));
 vi.mock('@/app/app/(chrome)/signups/[id]/actions', () => actions);
@@ -337,5 +338,173 @@ describe('<ReviewChanges />', () => {
     );
     expect(screen.getByText('Removed Sat, Apr 6 and its 2 slots.')).toBeInTheDocument();
     expect(undoButton()).toBeNull();
+  });
+});
+
+// People for each slot (#504), by the headline, sharing the card's line.
+const FINGERPRINT = '2.abcdefghijklmnop';
+
+const SET_UNDO: DraftFixUndo = {
+  kind: 'set_capacity',
+  capacity: 4,
+  previous: [{ id: 'slot_1', capacity: 1 }],
+};
+
+/** The slots card as the page draws it: the control by the headline, then the list. */
+function CapacityCard({ shared = null }: { shared?: number | null }) {
+  return (
+    <ReviewChanges
+      signupId="sig_1"
+      header={
+        <PeopleForEachSlot
+          signupId="sig_1"
+          fingerprint={FINGERPRINT}
+          shared={shared}
+          max={2_147_483_647}
+        />
+      }
+    >
+      <ReviewSlotEditing signupId="sig_1" fields={FIELDS} id="slots" className="" allDrawn>
+        <RemoveDayButton
+          signupId="sig_1"
+          request={{ kind: 'remove_day', ref: 'date', value: '2030-04-06', fingerprint: 'x' }}
+          name="Remove day: Sat, Apr 6"
+        />
+        <ul>
+          <ReviewSlotRow slot={{ id: 'slot_1', values: { what: 'Napkins' }, capacity: 1 }}>
+            Napkins
+          </ReviewSlotRow>
+        </ul>
+      </ReviewSlotEditing>
+    </ReviewChanges>
+  );
+}
+
+const box = () => screen.getByRole('spinbutton', { name: 'People for each slot' });
+const setButton = () => screen.getByRole('button', { name: 'Set' });
+
+/** Types `n` and chooses Set. */
+function setTo(n: string) {
+  fireEvent.change(box(), { target: { value: n } });
+  fireEvent.click(setButton());
+}
+
+describe('<PeopleForEachSlot />', () => {
+  it('starts with the number every slot takes, or empty when they differ', () => {
+    const { unmount } = render(<CapacityCard shared={3} />);
+    expect(box()).toHaveValue(3);
+    expect(box()).toBeRequired();
+    expect(box()).toHaveAttribute('min', '1');
+    unmount();
+    render(<CapacityCard />);
+    expect(box()).toHaveValue(null);
+  });
+
+  it('sets every slot, waits while it does, then says so with Undo in focus', async () => {
+    const answer = deferred<{ done: string; undo: DraftFixUndo }>();
+    actions.setCapacityAction.mockReturnValue(answer.promise);
+    render(<CapacityCard shared={3} />);
+
+    setTo('4');
+    await waitFor(() =>
+      expect(actions.setCapacityAction).toHaveBeenCalledWith('sig_1', {
+        kind: 'set_capacity',
+        capacity: 4,
+        fingerprint: FINGERPRINT,
+      }),
+    );
+    // Every change on the card waits while one is in flight.
+    await waitFor(() => expect(setButton()).toBeDisabled());
+    expect(setButton()).toHaveAttribute('aria-busy', 'true');
+    expect(screen.getByRole('button', { name: 'Remove day: Sat, Apr 6' })).toBeDisabled();
+
+    answer.resolve({ done: 'Set every slot to 4 people.', undo: SET_UNDO });
+    expect(await screen.findByText('Set every slot to 4 people.')).toBeInTheDocument();
+    await waitFor(() => expect(undoButton()).toHaveFocus());
+    expect(setButton()).toBeEnabled();
+  });
+
+  it('undoes it through the card’s one Undo', async () => {
+    actions.setCapacityAction.mockResolvedValue({
+      done: 'Set every slot to 4 people.',
+      undo: SET_UNDO,
+    });
+    actions.undoDraftFixAction.mockResolvedValue(null);
+    render(<CapacityCard />);
+    setTo('4');
+    await waitFor(() => expect(undoButton()).toHaveFocus());
+
+    fireEvent.click(undoButton()!);
+    expect(await screen.findByText('Undone.')).toBeInTheDocument();
+    expect(actions.undoDraftFixAction).toHaveBeenCalledWith('sig_1', SET_UNDO);
+  });
+
+  it('says when every slot already took that number, without Undo', async () => {
+    actions.removeDayAction.mockResolvedValue({
+      done: 'Removed Sat, Apr 6 and its slot.',
+      undo: DAY_UNDO,
+    });
+    actions.setCapacityAction.mockResolvedValue({
+      done: 'Every slot is already for 3 people.',
+      undo: null,
+    });
+    render(<CapacityCard shared={3} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Remove day: Sat, Apr 6' }));
+    await waitFor(() => expect(undoButton()).toHaveFocus());
+
+    fireEvent.click(setButton());
+    const said = await screen.findByText('Every slot is already for 3 people.');
+    expect(undoButton()).toBeNull();
+    await waitFor(() => expect(said.closest('[role="status"]')).toHaveFocus());
+  });
+
+  it('says why it was refused under the box, with focus, and keeps the last Undo', async () => {
+    actions.removeDayAction.mockResolvedValue({
+      done: 'Removed Sat, Apr 6 and its slot.',
+      undo: DAY_UNDO,
+    });
+    actions.setCapacityAction.mockResolvedValue({
+      error: 'Type a whole number of people, 1 or more.',
+    });
+    render(<CapacityCard />);
+    fireEvent.click(screen.getByRole('button', { name: 'Remove day: Sat, Apr 6' }));
+    await screen.findByText('Removed Sat, Apr 6 and its slot.');
+
+    setTo('2');
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent('Type a whole number of people, 1 or more.');
+    expect(box().closest('form')?.parentElement).toContainElement(alert);
+    await waitFor(() => expect(alert.parentElement).toHaveFocus());
+    expect(screen.getByText('Removed Sat, Apr 6 and its slot.')).toBeInTheDocument();
+    expect(undoButton()).toBeInTheDocument();
+  });
+
+  it('says so in words when no answer comes back', async () => {
+    actions.setCapacityAction.mockRejectedValue(new Error('offline'));
+    render(<CapacityCard />);
+    setTo('2');
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent('Couldn’t set that. Try again.');
+    expect(box().closest('form')?.parentElement).toContainElement(alert);
+    expect(setButton()).toBeEnabled();
+  });
+
+  it('saves an open, changed slot first, then sets every slot', async () => {
+    fetchMock.mockResolvedValue(new Response(JSON.stringify({ data: {} }), { status: 200 }));
+    actions.setCapacityAction.mockResolvedValue({
+      done: 'Set every slot to 4 people.',
+      undo: SET_UNDO,
+    });
+    render(<CapacityCard />);
+    fireEvent.click(screen.getByRole('button', { name: /^Edit slot — Napkins/ }));
+    fireEvent.change(await screen.findByLabelText('Capacity'), { target: { value: '3' } });
+
+    setTo('4');
+    expect(await screen.findByText('Set every slot to 4 people.')).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(String(fetchMock.mock.calls[0]?.[0])).toBe('/api/slots/slot_1');
+    expect(fetchMock.mock.invocationCallOrder[0]).toBeLessThan(
+      actions.setCapacityAction.mock.invocationCallOrder[0]!,
+    );
   });
 });

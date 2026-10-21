@@ -8,6 +8,7 @@ import { parseInputSafe } from '@/lib/parse';
 import { requireWorkspaceWrite, type Actor } from '@/lib/policy';
 import { err, ok, type Result } from '@/lib/result';
 import {
+  MAX_CAPACITY,
   SlotMergeInputSchema,
   type SlotUnmergeInput,
   SlotUnmergeInputSchema,
@@ -29,10 +30,6 @@ interface ReminderSettingsLike {
   reminderFromFieldRef?: string | undefined;
   [k: string]: unknown;
 }
-
-// The top of the int `capacity` column. Each slot is under it, but a merged
-// total need not be.
-const MAX_CAPACITY = 2_147_483_647;
 
 /** The slots' total capacity: null (no limit) when any of them has none. */
 function totalCapacity(capacities: readonly (number | null)[]): number | null {
@@ -176,6 +173,7 @@ export async function mergeSlots(
       );
     }
 
+    // Each slot is under the column's top, but their total need not be.
     const capacity = totalCapacity(group.map((s) => s.capacity));
     if (capacity !== null && capacity > MAX_CAPACITY) {
       return err(

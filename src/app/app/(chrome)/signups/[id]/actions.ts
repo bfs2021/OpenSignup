@@ -11,9 +11,19 @@ import { log } from '@/lib/log';
 import { requireOrganizerId } from '@/lib/policy';
 import { chargeRateLimit, RateLimits } from '@/lib/rate-limit';
 import type { Result } from '@/lib/result';
-import type { DraftFixRequest, DraftFixUndo, RemoveDayRequest } from '@/schemas/draft-fixes';
+import type {
+  DraftFixRequest,
+  DraftFixUndo,
+  RemoveDayRequest,
+  SetCapacityRequest,
+} from '@/schemas/draft-fixes';
 import { removeCommitment } from '@/services/commitments';
-import { applyDraftFix, removeDraftDay, undoDraftFix } from '@/services/draft-fixes';
+import {
+  applyDraftFix,
+  removeDraftDay,
+  setDraftCapacity,
+  undoDraftFix,
+} from '@/services/draft-fixes';
 import { emailDraftLink } from '@/services/draft-nudge';
 import { closeSignup, deleteSignup, publishSignup, updateSignup } from '@/services/signups';
 import { fixRefusal, type FixStep } from './fix-refusal';
@@ -141,8 +151,9 @@ export async function removeCommitmentAction(
 }
 
 /**
- * Runs a review-page fix, Remove day, or Undo, and turns a refusal into plain
- * words (`fixRefusal`): a viewer's, which the policy guard throws, included.
+ * Runs a review-page fix, Remove day, "People for each slot", or Undo, and
+ * turns a refusal into plain words (`fixRefusal`): a viewer's, which the
+ * policy guard throws, included.
  */
 async function runFix<T>(
   step: FixStep,
@@ -212,8 +223,27 @@ export async function removeDayAction(
 }
 
 /**
- * Undo, for the last fix or Remove day the review page made. Null once it's
- * undone.
+ * "People for each slot" on a draft's review page: every slot, as the page
+ * showed them, to take `request.capacity` people. Returns what was done, in
+ * words, and the undo for it, as Remove day does; no undo when every slot
+ * already took that number, as nothing was done. The page comes back either
+ * way, so a number set meanwhile elsewhere shows.
+ */
+export async function setCapacityAction(
+  signupId: string,
+  request: SetCapacityRequest,
+): Promise<{ done: string; undo: DraftFixUndo | null } | { error: string }> {
+  const actor = await requireActor();
+  const result = await runFix('set_capacity', signupId, () =>
+    setDraftCapacity(getDb(), actor, signupId, request),
+  );
+  if ('error' in result) return result;
+  return { done: result.ok.done, undo: result.ok.undo };
+}
+
+/**
+ * Undo, for the last fix, Remove day or "People for each slot" the review
+ * page made. Null once it's undone.
  */
 export async function undoDraftFixAction(
   signupId: string,

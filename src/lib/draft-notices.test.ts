@@ -6,6 +6,7 @@ import {
   noticeText,
   noticeView,
   removeDayDoneText,
+  setCapacityDoneText,
 } from './draft-notices';
 
 const what: DraftField = { id: 'f_what', ref: 'what', label: 'What', fieldType: 'text' };
@@ -304,5 +305,17 @@ describe('removeDayDoneText', () => {
   it('names the day as its header shows it, and how many slots went with it', () => {
     expect(removeDayDoneText('Sat, Apr 6', 4)).toBe('Removed Sat, Apr 6 and its 4 slots.');
     expect(removeDayDoneText('Sat, Apr 6', 1)).toBe('Removed Sat, Apr 6 and its slot.');
+  });
+});
+
+describe('setCapacityDoneText', () => {
+  it('says every slot was set, for one person or several', () => {
+    expect(setCapacityDoneText(3, true)).toBe('Set every slot to 3 people.');
+    expect(setCapacityDoneText(1, true)).toBe('Set every slot to 1 person.');
+  });
+
+  it('says so when every slot already took that number', () => {
+    expect(setCapacityDoneText(3, false)).toBe('Every slot is already for 3 people.');
+    expect(setCapacityDoneText(1, false)).toBe('Every slot is already for 1 person.');
   });
 });

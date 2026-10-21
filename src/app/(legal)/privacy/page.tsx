@@ -65,8 +65,9 @@ export default function PrivacyPage() {
             went, a publish or an AI draft that didn&rsquo;t go through), which of your own pages
             you open and whether on a phone or a computer (never the browser&rsquo;s full
             identifying string), which kinds of problem the review page pointed out in a draft,
-            which of its one-tap fixes you took or undid, and when you removed a day of slots there
-            or undid that (never the values themselves),
+            which of its one-tap fixes you took or undid, and when you removed a day of slots there,
+            gave every slot there the same number of spots, or undid either (never the values
+            themselves),
             participant commitments on your signups, reminder dispatches, the emails we send you
             about a draft, and turning those emails off or on.
             This exists so an organizer can audit what happened in their own workspace, so the

@@ -95,4 +95,26 @@ describe('fixRefusal', () => {
       ),
     ).toBe('Couldn’t remove that day. Try again.');
   });
+
+  it('reads People for each slot as a fix, and says what is wrong with its number', () => {
+    expect(fixRefusal(serviceError('conflict', 'x', reason('stale')), 'set_capacity')).toBe(
+      'That changed since you opened this page, so nothing was done.',
+    );
+    expect(fixRefusal(serviceError('conflict', 'x', reason('not_draft')), 'set_capacity')).toBe(
+      'This signup isn’t a draft any more. Change it in the builder.',
+    );
+    expect(
+      fixRefusal(serviceError('invalid_input', 'x', { field: 'capacity' }), 'set_capacity'),
+    ).toBe('Type a whole number of people, 1 or more.');
+    // Only its own box: not a fix's or an undo's refusal on a capacity.
+    expect(fixRefusal(serviceError('invalid_input', 'x', { field: 'capacity' }), 'undo')).toBe(
+      'Couldn’t undo that. Change it in the builder.',
+    );
+    expect(
+      fixRefusal(serviceError('invalid_input', 'x', { field: 'fingerprint' }), 'set_capacity'),
+    ).toBe('Couldn’t set that. Try again.');
+    expect(fixRefusal(serviceError('internal', 'boom'), 'set_capacity')).toBe(
+      'Couldn’t set that. Try again.',
+    );
+  });
 });

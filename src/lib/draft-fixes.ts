@@ -17,6 +17,7 @@ import type {
   DraftFixRequest,
   DraftFixUndo,
   RemoveDayRequest,
+  SetCapacityRequest,
 } from '@/schemas/draft-fixes';
 import { SLOTS_PER_BULK_ADD, type SlotUnmergeInput } from '@/schemas/slots';
 import {
@@ -180,6 +181,26 @@ export function draftSlotsRefusal(error: ServiceError, step: 'fix' | 'undo'): Se
 }
 
 /**
+ * A refusal from `updateSlotCapacities`, for "People for each slot" (`step`
+ * 'fix') or its Undo, as `draftSlotsRefusal` words the others'. Both of its
+ * refusals of a request that read fine come from a change since: a slot
+ * that isn't the signup's any more, deleted meanwhile; and a capacity below
+ * the places a slot has taken, which only someone signing up since the
+ * signup was published can cause, as a draft takes none. So both read as
+ * one ('stale' for the change, 'changed' for its Undo). Anything else passes
+ * on without its field, which names the service's own input.
+ */
+export function capacitiesRefusal(error: ServiceError, step: 'fix' | 'undo'): ServiceError {
+  const { code, message } = error;
+  if (code === 'conflict' || (code === 'invalid_input' && error.field === 'slots')) {
+    return serviceError('conflict', message, {
+      details: { reason: step === 'fix' ? 'stale' : 'changed' },
+    });
+  }
+  return serviceError(code, message);
+}
+
+/**
  * What's wrong with a new name for a field, or null: blank, too long, or still
  * the builder's default, which the check would point out again.
  */
@@ -275,7 +296,8 @@ export type UndoPlan =
   | ({ kind: 'blank_slot' | 'remove_day' } & SlotsBack)
   | { kind: 'unnamed_field'; fieldId: string; label: string }
   | { kind: 'ungrouped_dates'; groupByFieldRefs: string[] }
-  | { kind: 'duplicate_slots'; unmerge: SlotUnmergeInput };
+  | { kind: 'duplicate_slots'; unmerge: SlotUnmergeInput }
+  | { kind: 'set_capacity'; slots: { id: string; capacity: number | null }[] };
 
 /** A name that was blank goes back as the builder's default: a field needs one. */
 export function restoredLabel(previous: string): string {
@@ -356,6 +378,15 @@ export function planUndo(undo: DraftFixUndo, now: DraftState): UndoPlan | null {
       // double them, or mix them into a day made since.
       if (now.slots.some((s) => groupKeyOf(s.values[undo.ref]) === undo.value)) return null;
       return { kind: 'remove_day', ...slotsBack(undo.slots, now) };
+    }
+    case 'set_capacity': {
+      // Only while every slot it changed is still there and still takes the
+      // number it set. A capacity changed since (a slot opened on the page,
+      // the builder, an AI assistant) is never overwritten; and once this
+      // undo has run, no slot it names takes that number any more.
+      const capacities = new Map(now.slots.map((s) => [s.id, s.capacity]));
+      if (!undo.previous.every((p) => capacities.get(p.id) === undo.capacity)) return null;
+      return { kind: 'set_capacity', slots: undo.previous };
     }
   }
 }
@@ -506,4 +537,53 @@ export function removeDayUndo(day: RemovableDay, before: DraftState): DraftFixUn
     value: day.value,
     slots: removedSlots(before, day.slotIds),
   };
+}
+
+/**
+ * "People for each slot" on the review page (issue #504), when it's offered:
+ * on a draft with two slots or more, and no more than one call sets at once.
+ * `fingerprint` stands for every slot (`slotSetFingerprint`), and `shared` is
+ * the number of people every slot takes when they all take the same one,
+ * which the box starts with; null when they differ or none has a limit.
+ */
+export interface CapacityOffer {
+  fingerprint: string;
+  shared: number | null;
+}
+
+export function capacityOffer(
+  slots: readonly { id: string; capacity: number | null }[],
+): CapacityOffer | null {
+  if (slots.length < 2 || slots.length > SLOTS_PER_BULK_ADD) return null;
+  const first = slots[0]!.capacity;
+  return {
+    fingerprint: slotSetFingerprint(slots.map((s) => s.id)),
+    shared: slots.every((s) => s.capacity === first) ? first : null,
+  };
+}
+
+/**
+ * The slots "People for each slot" sets, on the draft as it is now: every
+ * one, when they are exactly the slots the page showed (the same
+ * fingerprint) and it would still offer the control. Null otherwise: a slot
+ * added or deleted since, and nothing is set.
+ */
+export function findCapacitySlots(
+  slots: readonly { id: string; capacity: number | null }[],
+  request: SetCapacityRequest,
+): string[] | null {
+  const offer = capacityOffer(slots);
+  return offer?.fingerprint === request.fingerprint ? slots.map((s) => s.id) : null;
+}
+
+/**
+ * How to undo "People for each slot": the capacity it set, and each slot it
+ * changed with the capacity it had before (`updateSlotCapacities`' own
+ * `previous`).
+ */
+export function setCapacityUndo(
+  capacity: number,
+  previous: { id: string; capacity: number | null }[],
+): DraftFixUndo {
+  return { kind: 'set_capacity', capacity, previous };
 }

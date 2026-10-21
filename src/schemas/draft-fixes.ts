@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { SortOrderSchema } from './common';
 import { FIELD_TYPES, LABEL_MAX_LENGTH, RefSchema, SlotFieldConfigSchema } from './slot-fields';
-import { MAX_MERGE_SLOTS, SLOTS_PER_BULK_ADD, SlotUnmergeInputSchema } from './slots';
+import { MAX_CAPACITY, MAX_MERGE_SLOTS, SLOTS_PER_BULK_ADD, SlotUnmergeInputSchema } from './slots';
 
 const IdSchema = z.string().min(1).max(64);
 
@@ -58,6 +58,24 @@ export const RemoveDayRequestSchema = z
   })
   .strict();
 export type RemoveDayRequest = z.infer<typeof RemoveDayRequestSchema>;
+
+/** How many people "People for each slot" gives each slot: a whole number, 1 or more. */
+const PeopleEachSchema = z.number().int().positive().max(MAX_CAPACITY);
+
+/**
+ * The review page's "People for each slot" (issue #504): every slot of the
+ * draft to take `capacity` people. `fingerprint` stands for every slot the
+ * page showed (`slotSetFingerprint`), as for Remove day, so the server sets
+ * only the slots the organizer saw, without the page holding every id.
+ */
+export const SetCapacityRequestSchema = z
+  .object({
+    kind: z.literal('set_capacity'),
+    capacity: PeopleEachSchema,
+    fingerprint: z.string().min(1).max(64),
+  })
+  .strict();
+export type SetCapacityRequest = z.infer<typeof SetCapacityRequestSchema>;
 
 /** Slots taken out, as they were, for an undo to add back. */
 const RemovedSlotsSchema = z
@@ -144,8 +162,22 @@ export const DraftFixUndoSchema = z.discriminatedUnion('kind', [
       slots: RemovedSlotsSchema,
     })
     .strict(),
+  z
+    .object({
+      kind: z.literal('set_capacity'),
+      /** What "People for each slot" set every slot to. */
+      capacity: PeopleEachSchema,
+      /** Each slot it changed, with the capacity it had before; null for no limit. */
+      previous: z
+        .array(
+          z.object({ id: IdSchema, capacity: z.number().int().positive().nullable() }).strict(),
+        )
+        .min(1)
+        .max(SLOTS_PER_BULK_ADD),
+    })
+    .strict(),
 ]);
 export type DraftFixUndo = z.infer<typeof DraftFixUndoSchema>;
 
-/** What an undo puts back: a one-tap fix's kind, or `remove_day`. */
+/** What an undo puts back: a one-tap fix's kind, `remove_day` or `set_capacity`. */
 export type DraftUndoKind = DraftFixUndo['kind'];

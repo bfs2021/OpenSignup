@@ -3,7 +3,9 @@ import { activityActor, recordActivityBestEffort } from '@/lib/activity';
 import { checkDraft } from '@/lib/draft-checks';
 import {
   buildUndo,
+  capacitiesRefusal,
   draftInputOf,
+  findCapacitySlots,
   findDayFor,
   findNoticeFor,
   labelProblem,
@@ -11,11 +13,12 @@ import {
   mergeRequestFor,
   planUndo,
   removeDayUndo,
+  setCapacityUndo,
   type DraftState,
   type FixableNotice,
   type UndoPlan,
 } from '@/lib/draft-fixes';
-import { fixDoneText, removeDayDoneText } from '@/lib/draft-notices';
+import { fixDoneText, removeDayDoneText, setCapacityDoneText } from '@/lib/draft-notices';
 import { serviceError, type ServiceError } from '@/lib/errors';
 import { parseInputSafe } from '@/lib/parse';
 import { requireWorkspaceWrite, type Actor } from '@/lib/policy';
@@ -24,6 +27,7 @@ import {
   DraftFixRequestSchema,
   DraftFixUndoSchema,
   RemoveDayRequestSchema,
+  SetCapacityRequestSchema,
   type DraftFixUndo,
   type DraftUndoKind,
 } from '@/schemas/draft-fixes';
@@ -31,11 +35,11 @@ import type { SlotUnmergeInput } from '@/schemas/slots';
 import { getSignupForOrganizer, updateSignup } from './signups';
 import { addField, deleteField, updateField } from './slot-fields';
 import { mergeSlots, unmergeSlots } from './slot-merge';
-import { addSlotsBulk, deleteDraftSlots, updateSlot } from './slots';
+import { addSlotsBulk, deleteDraftSlots, updateSlot, updateSlotCapacities } from './slots';
 
 /**
- * The review page's one-tap fixes (issue #503), its Remove day (issue #504),
- * and their Undo. Each change and each undo is made by the services the
+ * The review page's one-tap fixes (issue #503), its Remove day and "People
+ * for each slot" (issue #504), and their Undo. Each change and each undo is made by the services the
  * builder and the AI connector use, or, for copies, by `mergeSlots` and
  * `unmergeSlots`, so it is checked, locked and logged as theirs are; this only
  * decides which of them to call. Drafts only: anything else is refused with
@@ -241,12 +245,69 @@ export async function removeDraftDay(
 }
 
 /**
- * Undoes a fix, or a Remove day, from the undo `applyDraftFix` or
- * `removeDraftDay` returned, by the inverse changes through the same
- * services. Refused with `conflict` and `details.reason: 'changed'` when the
- * signup has changed since in a way the undo would overwrite (`planUndo`).
- * Writes `review.fix_undone` with the kind (`remove_day` for a day), best
- * effort, once it's done.
+ * "People for each slot" on a draft's review page (issue #504): every slot
+ * to take the number of people `rawInput` names, in one transaction
+ * (`updateSlotCapacities`, which leaves a slot that already takes it alone).
+ * The slots must be exactly the ones the page showed, by their fingerprint
+ * (`findCapacitySlots`); otherwise nothing changes and the answer is
+ * `conflict` with `details.reason: 'stale'`, as for Remove day: a slot added
+ * or deleted since, by another tab or an AI assistant. As there, that check
+ * runs just before the change, not inside its transaction, which checks
+ * again that each slot is still the signup's.
+ *
+ * Returns what Remove day returns, with no undo when every slot already took
+ * that number: nothing was done. Otherwise writes `review.slots_edited` with
+ * `{ kind: 'set_capacity' }`, best effort and outside the change's own
+ * transaction, which writes `slot.updated`.
+ */
+export async function setDraftCapacity(
+  db: Db,
+  actor: Actor,
+  signupId: string,
+  rawInput: unknown,
+): Promise<Result<Omit<AppliedDraftFix, 'undo'> & { undo: DraftFixUndo | null }, ServiceError>> {
+  const input = parseInputSafe(SetCapacityRequestSchema, rawInput);
+  if (!input.ok) return input;
+  const { capacity } = input.value;
+
+  const loaded = await loadDraft(db, actor, signupId);
+  if (!loaded.ok) return loaded;
+  const { workspaceId, state } = loaded.value;
+
+  const slotIds = findCapacitySlots(state.slots, input.value);
+  if (!slotIds) return err(conflict('stale', 'the draft no longer has the slots the page showed'));
+
+  const set = await updateSlotCapacities(db, actor, signupId, {
+    slots: slotIds.map((id) => ({ id, capacity })),
+  });
+  if (!set.ok) return err(capacitiesRefusal(set.error, 'fix'));
+  const { previous } = set.value;
+  if (previous.length === 0) {
+    return ok({ kind: 'set_capacity', undo: null, done: setCapacityDoneText(capacity, false) });
+  }
+
+  await recordActivityBestEffort(db, {
+    signupId,
+    workspaceId,
+    actor: activityActor(actor),
+    eventType: 'review.slots_edited',
+    payload: { kind: 'set_capacity' },
+  });
+  return ok({
+    kind: 'set_capacity',
+    undo: setCapacityUndo(capacity, previous),
+    done: setCapacityDoneText(capacity, true),
+  });
+}
+
+/**
+ * Undoes a fix, a Remove day or "People for each slot", from the undo
+ * `applyDraftFix`, `removeDraftDay` or `setDraftCapacity` returned, by the
+ * inverse changes through the same services. Refused with `conflict` and
+ * `details.reason: 'changed'` when the signup has changed since in a way the
+ * undo would overwrite (`planUndo`). Writes `review.fix_undone` with the kind
+ * (`remove_day` for a day, `set_capacity` for people each), best effort,
+ * once it's done.
  */
 export async function undoDraftFix(
   db: Db,
@@ -323,6 +384,10 @@ async function undo(
     case 'duplicate_slots': {
       const r = await unmergeSlots(db, actor, signupId, plan.unmerge);
       return r.ok ? ok(null) : err(draftSlotsRefusal(r.error, 'undo'));
+    }
+    case 'set_capacity': {
+      const r = await updateSlotCapacities(db, actor, signupId, { slots: plan.slots });
+      return r.ok ? ok(null) : err(capacitiesRefusal(r.error, 'undo'));
     }
   }
 }

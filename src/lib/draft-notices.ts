@@ -244,3 +244,15 @@ export function fixDoneText(notice: FixableNotice, ctx: NoticeContext, label = '
 export function removeDayDoneText(day: string, slots: number): string {
   return slots === 1 ? `Removed ${day} and its slot.` : `Removed ${day} and its ${slots} slots.`;
 }
+
+/**
+ * What the review page says once "People for each slot" is done, next to
+ * Undo: "Set every slot to 3 people." With `changed` false, no slot took
+ * another number, so nothing was done and there is nothing to undo: "Every
+ * slot is already for 3 people."
+ */
+export function setCapacityDoneText(capacity: number, changed: boolean): string {
+  return changed
+    ? `Set every slot to ${people(capacity)}.`
+    : `Every slot is already for ${people(capacity)}.`;
+}

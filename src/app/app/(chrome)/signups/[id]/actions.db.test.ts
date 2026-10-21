@@ -18,16 +18,18 @@ import type {
   DraftFixRequest,
   DraftFixUndo,
   RemoveDayRequest,
+  SetCapacityRequest,
 } from '@/schemas/draft-fixes';
 import { createSignup, publishSignup, updateSignup } from '@/services/signups';
 import { deleteField, listFieldsForSignup, updateField } from '@/services/slot-fields';
-import { addSlot, updateSlot } from '@/services/slots';
+import { addSlot, deleteDraftSlots, updateSlot } from '@/services/slots';
 import {
   applyDraftFixAction,
   deleteSignupAction,
   emailDraftLinkAction,
   publishAction,
   removeDayAction,
+  setCapacityAction,
   setRequireEmailAction,
   undoDraftFixAction,
 } from './actions';
@@ -450,7 +452,8 @@ describe('applyDraftFixAction and undoDraftFixAction (db)', () => {
       | 'review.notice_accepted'
       | 'review.fix_undone'
       | 'review.slots_edited'
-      | 'slot.deleted',
+      | 'slot.deleted'
+      | 'slot.updated',
   ) {
     const rows = await db
       .select({ payload: activity.payload, actorId: activity.actorId })
@@ -1025,6 +1028,187 @@ describe('applyDraftFixAction and undoDraftFixAction (db)', () => {
         error: 'Couldn’t remove that day. Try again.',
       });
       expect(await snapshot(id)).toEqual(before);
+    });
+  });
+
+  // People for each slot (#504): every slot's capacity at once, through the
+  // same Undo.
+  describe('setCapacityAction', () => {
+    // One slot for 1, one for 3, one with no limit, one of them closed.
+    const mixed: Scenario = {
+      template: [text('what', 'What', 0), dateField('date', 'Date', 1)],
+      slots: [
+        { capacity: 1, values: { what: 'Setup', date: '2030-04-06' }, sortOrder: 0 },
+        { capacity: 3, values: { what: 'Till', date: '2030-04-06' }, sortOrder: 1 },
+        { capacity: null, values: { what: 'Cleanup', date: '2030-04-13' }, sortOrder: 2 },
+      ],
+      setup: async (s) => {
+        const closed = await updateSlot(db, owner, s.ids.slots[1]!, { status: 'closed' });
+        if (!closed.ok) throw new Error(closed.error.message);
+      },
+      // Unused: People for each slot sends its own request.
+      request: () => {
+        throw new Error('not a fix');
+      },
+      done: '',
+      fixed: () => {},
+    };
+    /** What the page sends for these slots, every one of the draft's. */
+    const each = (capacity: number, s: Snapshot): SetCapacityRequest => ({
+      kind: 'set_capacity',
+      capacity,
+      fingerprint: slotSetFingerprint(s.ids.slots),
+    });
+    const capacities = async (id: string) => (await snapshot(id)).slots.map((s) => s.capacity);
+    const stale = { error: 'That changed since you opened this page, so nothing was done.' };
+    const changedAgain = { error: 'That changed again since, so it can’t be undone.' };
+
+    it('sets every slot; Undo puts back each one it changed', async () => {
+      const { id, before } = await draftFor(mixed);
+
+      const set = await setCapacityAction(id, each(3, before));
+      if ('error' in set) throw new Error(set.error);
+      expect(set.done).toBe('Set every slot to 3 people.');
+      expect(set.undo?.kind).toBe('set_capacity');
+      expect(revalidatePath).toHaveBeenCalledWith(`/app/signups/${id}`, 'layout');
+      expect(await capacities(id)).toEqual([3, 3, 3]);
+      // One row for the slots that changed, and one saying the page did it;
+      // not a notice's fix.
+      expect(await events(id, 'slot.updated')).toContainEqual({
+        payload: {
+          bulk: true,
+          slotIds: [before.ids.slots[0], before.ids.slots[2]],
+          changed: ['capacity'],
+        },
+        actorId: organizerId,
+      });
+      expect(
+        (await events(id, 'slot.updated')).filter((e) => 'bulk' in (e.payload as object)),
+      ).toHaveLength(1);
+      expect(await events(id, 'review.slots_edited')).toEqual([
+        { payload: { kind: 'set_capacity' }, actorId: organizerId },
+      ]);
+      expect(await events(id, 'review.notice_accepted')).toHaveLength(0);
+
+      // The undo goes to the browser and back as plain data.
+      const undo = JSON.parse(JSON.stringify(set.undo)) as DraftFixUndo;
+      revalidatePath.mockClear();
+      expect(await undoDraftFixAction(id, undo)).toBeNull();
+      expect(revalidatePath).toHaveBeenCalledWith(`/app/signups/${id}`, 'layout');
+      expect(await snapshot(id)).toEqual(before);
+      expect(await events(id, 'review.fix_undone')).toEqual([
+        { payload: { kind: 'set_capacity' }, actorId: organizerId },
+      ]);
+    });
+
+    it('says one person as one', async () => {
+      const { id, before } = await draftFor(mixed);
+      expect(await setCapacityAction(id, each(1, before))).toMatchObject({
+        done: 'Set every slot to 1 person.',
+      });
+      expect(await capacities(id)).toEqual([1, 1, 1]);
+    });
+
+    it('writes nothing, and offers no Undo, when every slot already takes that number', async () => {
+      const { id, before } = await draftFor({
+        ...mixed,
+        slots: mixed.slots.map((slot) => ({ ...slot, capacity: 2 })),
+      });
+      expect(await setCapacityAction(id, each(2, before))).toEqual({
+        done: 'Every slot is already for 2 people.',
+        undo: null,
+      });
+      expect(await snapshot(id)).toEqual(before);
+      // Only the setup's close.
+      expect(await events(id, 'slot.updated')).toHaveLength(1);
+      expect(await events(id, 'review.slots_edited')).toHaveLength(0);
+    });
+
+    it('sets nothing once a slot was added or deleted since', async () => {
+      const added = await draftFor(mixed);
+      const extra = await addSlot(db, owner, added.id, {
+        values: { what: 'Music', date: '2030-04-06' },
+        capacity: 1,
+      });
+      if (!extra.ok) throw new Error(extra.error.message);
+      const addedNow = await snapshot(added.id);
+      revalidatePath.mockClear();
+      expect(await setCapacityAction(added.id, each(4, added.before))).toEqual(stale);
+      expect(await snapshot(added.id)).toEqual(addedNow);
+      // The page comes back as it is now.
+      expect(revalidatePath).toHaveBeenCalled();
+      expect(await events(added.id, 'review.slots_edited')).toHaveLength(0);
+
+      const deleted = await draftFor(mixed);
+      const gone = await deleteDraftSlots(db, owner, deleted.id, {
+        slotIds: [deleted.before.ids.slots[2]!],
+      });
+      if (!gone.ok) throw new Error(gone.error.message);
+      const deletedNow = await snapshot(deleted.id);
+      expect(await setCapacityAction(deleted.id, each(4, deleted.before))).toEqual(stale);
+      expect(await snapshot(deleted.id)).toEqual(deletedNow);
+    });
+
+    it('won’t undo once a slot it changed takes another number since', async () => {
+      const { id, before } = await draftFor(mixed);
+      const set = await setCapacityAction(id, each(4, before));
+      if ('error' in set || !set.undo) throw new Error('not set');
+      // Opened on the page, in the builder, or by an AI assistant.
+      const edited = await updateSlot(db, owner, before.ids.slots[2]!, { capacity: 6 });
+      if (!edited.ok) throw new Error(edited.error.message);
+      const changed = await snapshot(id);
+
+      expect(await undoDraftFixAction(id, set.undo)).toEqual(changedAgain);
+      expect(await snapshot(id)).toEqual(changed);
+      expect(await events(id, 'review.fix_undone')).toHaveLength(0);
+    });
+
+    it('undoes it only once', async () => {
+      const { id, before } = await draftFor(mixed);
+      const set = await setCapacityAction(id, each(4, before));
+      if ('error' in set || !set.undo) throw new Error('not set');
+      expect(await undoDraftFixAction(id, set.undo)).toBeNull();
+      const undone = await snapshot(id);
+      // Sent again, as after an answer that never arrived.
+      expect(await undoDraftFixAction(id, set.undo)).toEqual(changedAgain);
+      expect(await snapshot(id)).toEqual(undone);
+      expect(await events(id, 'review.fix_undone')).toHaveLength(1);
+    });
+
+    it('refuses a number that isn’t a whole number of people, and sets nothing', async () => {
+      const { id, before } = await draftFor(mixed);
+      for (const capacity of [0, -2, 2.5, Number.NaN, 3_000_000_000]) {
+        expect(await setCapacityAction(id, each(capacity, before))).toEqual({
+          error: 'Type a whole number of people, 1 or more.',
+        });
+      }
+      expect(await snapshot(id)).toEqual(before);
+      expect(await events(id, 'review.slots_edited')).toHaveLength(0);
+    });
+
+    it('refuses a viewer in plain words and sets nothing', async () => {
+      const { id, before } = await draftFor(mixed);
+      session.actor = viewer;
+      expect(await setCapacityAction(id, each(4, before))).toEqual({
+        error: 'You don’t have edit access.',
+      });
+      expect(await snapshot(id)).toEqual(before);
+      expect(revalidatePath).not.toHaveBeenCalled();
+    });
+
+    it('refuses a signup that is published, and its Undo too', async () => {
+      const { id, before } = await draftFor(mixed);
+      const set = await setCapacityAction(id, each(4, before));
+      if ('error' in set || !set.undo) throw new Error('not set');
+      const published = await publishSignup(db, owner, id);
+      if (!published.ok) throw new Error(published.error.message);
+      const open = await snapshot(id);
+      revalidatePath.mockClear();
+      const notDraft = { error: 'This signup isn’t a draft any more. Change it in the builder.' };
+      expect(await setCapacityAction(id, each(2, open))).toEqual(notDraft);
+      expect(await undoDraftFixAction(id, set.undo)).toEqual(notDraft);
+      expect(await snapshot(id)).toEqual(open);
+      expect(revalidatePath).not.toHaveBeenCalled();
     });
   });
 

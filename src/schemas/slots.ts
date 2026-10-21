@@ -71,6 +71,9 @@ export const MAX_MERGE_SLOTS = 500;
 
 const CapacitySchema = z.number().int().positive().nullable();
 
+/** The top of the int `capacity` column: no slot can take more people. */
+export const MAX_CAPACITY = 2_147_483_647;
+
 /**
  * A new capacity for each of several slots of one signup, set in one go
  * (issue #504, "People for each slot"): a positive whole number, or null for

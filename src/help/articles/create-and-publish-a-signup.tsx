@@ -169,6 +169,11 @@ export function CreateAndPublishASignup() {
               saving, choose <Ui>{UI.cancel}</Ui>.
             </p>
             <p>
+              To give every slot the same number of spots, type the number in{' '}
+              <Ui>{UI.peopleEach}</Ui>, above your slots. Then choose <Ui>{UI.setPeopleEach}</Ui>.
+              Right after, <Ui>{UI.undo}</Ui> puts back what each slot had.
+            </p>
+            <p>
               If your slots are grouped by date, choose <Ui>{UI.removeDay}</Ui> under a date to
               remove it and all its slots. Right after, <Ui>{UI.undo}</Ui> puts them back.
             </p>

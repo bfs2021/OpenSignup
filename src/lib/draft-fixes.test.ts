@@ -1,12 +1,15 @@
 import { describe, expect, it } from 'vitest';
-import type { DraftFixUndo, RemoveDayRequest } from '@/schemas/draft-fixes';
+import type { DraftFixUndo, RemoveDayRequest, SetCapacityRequest } from '@/schemas/draft-fixes';
 import { serviceError } from '@/lib/errors';
 import type { SlotFieldDefinition } from '@/schemas/slot-fields';
 import type { SlotUnmergeInput } from '@/schemas/slots';
 import { checkDraft, type DraftNotice, type DraftNoticeOf } from './draft-checks';
 import {
   buildUndo,
+  capacitiesRefusal,
+  capacityOffer,
   draftInputOf,
+  findCapacitySlots,
   findDayFor,
   findNoticeFor,
   fixRequestFor,
@@ -18,6 +21,7 @@ import {
   removeDayRequest,
   removeDayUndo,
   restoredLabel,
+  setCapacityUndo,
   slotSetFingerprint,
   type DraftState,
 } from './draft-fixes';
@@ -877,6 +881,142 @@ describe('Remove day and its undo', () => {
       kind: 'remove_day',
       rows: [{ values: { what: 'Setup', date: '2030-04-06' }, capacity: 1, sortOrder: 0 }],
       closed: [],
+    });
+  });
+});
+
+// "People for each slot" (#504): every slot's capacity at once.
+describe('capacityOffer', () => {
+  const two = [slot('a', {}, { capacity: 3 }), slot('b', {}, { capacity: 3 })];
+
+  it('is offered from two slots, starting at the number they all take', () => {
+    expect(capacityOffer(two)).toEqual({ fingerprint: slotSetFingerprint(['a', 'b']), shared: 3 });
+  });
+
+  it('starts empty when the slots take different numbers, or none has a limit', () => {
+    expect(capacityOffer([two[0]!, slot('b', {}, { capacity: 1 })])?.shared).toBeNull();
+    expect(capacityOffer([two[0]!, slot('b', {}, { capacity: null })])?.shared).toBeNull();
+    const unlimited = [slot('a', {}, { capacity: null }), slot('b', {}, { capacity: null })];
+    expect(capacityOffer(unlimited)?.shared).toBeNull();
+  });
+
+  it('is not offered for one slot, or more than one call sets', () => {
+    expect(capacityOffer([two[0]!])).toBeNull();
+    expect(capacityOffer([])).toBeNull();
+    const many = Array.from({ length: 501 }, (_, i) => slot(`s${i}`, {}));
+    expect(capacityOffer(many)).toBeNull();
+    expect(capacityOffer(many.slice(0, 500))).not.toBeNull();
+  });
+});
+
+describe('findCapacitySlots', () => {
+  const now = [slot('a', {}, { capacity: 1 }), slot('b', {}, { capacity: 2 })];
+  const request: SetCapacityRequest = {
+    kind: 'set_capacity',
+    capacity: 4,
+    fingerprint: slotSetFingerprint(['b', 'a']),
+  };
+
+  it('is every slot, when they are the ones the page showed', () => {
+    expect(findCapacitySlots(now, request)).toEqual(['a', 'b']);
+    // Whatever they take now: a number set since is set again.
+    expect(findCapacitySlots([now[0]!, slot('b', {}, { capacity: 9 })], request)).toEqual([
+      'a',
+      'b',
+    ]);
+  });
+
+  it('is nothing once a slot was added or deleted since', () => {
+    expect(findCapacitySlots([...now, slot('c', {})], request)).toBeNull();
+    expect(findCapacitySlots([now[0]!, slot('c', {})], request)).toBeNull();
+    // One slot left: the page wouldn't offer it.
+    const one = { ...request, fingerprint: slotSetFingerprint(['a']) };
+    expect(findCapacitySlots([now[0]!], one)).toBeNull();
+  });
+});
+
+describe('planUndo for People for each slot', () => {
+  const undo = setCapacityUndo(4, [
+    { id: 'a', capacity: 1 },
+    { id: 'c', capacity: null },
+  ]);
+  // Set to 4: a and c changed, b already took 4.
+  const after = state({
+    slots: [
+      slot('a', {}, { capacity: 4 }),
+      slot('b', {}, { capacity: 4 }),
+      slot('c', {}, { capacity: 4 }),
+    ],
+  });
+
+  it('puts back each slot it changed, and only those', () => {
+    expect(planUndo(undo, after)).toEqual({
+      kind: 'set_capacity',
+      slots: [
+        { id: 'a', capacity: 1 },
+        { id: 'c', capacity: null },
+      ],
+    });
+    // A slot added since, or one it didn't change taking another number,
+    // doesn't stop it, and isn't touched.
+    const more = state({
+      slots: [
+        after.slots[0]!,
+        slot('b', {}, { capacity: 7 }),
+        after.slots[2]!,
+        slot('d', {}, { capacity: 2 }),
+      ],
+    });
+    expect(planUndo(undo, more)).toEqual(planUndo(undo, after));
+  });
+
+  it('can’t once a slot it changed takes another number since', () => {
+    const edited = state({
+      slots: [after.slots[0]!, after.slots[1]!, slot('c', {}, { capacity: 5 })],
+    });
+    expect(planUndo(undo, edited)).toBeNull();
+    const unlimited = state({
+      slots: [slot('a', {}, { capacity: null }), after.slots[1]!, after.slots[2]!],
+    });
+    expect(planUndo(undo, unlimited)).toBeNull();
+  });
+
+  it('can’t twice: once undone, no slot it changed takes that number', () => {
+    const undone = state({
+      slots: [
+        slot('a', {}, { capacity: 1 }),
+        slot('b', {}, { capacity: 4 }),
+        slot('c', {}, { capacity: null }),
+      ],
+    });
+    expect(planUndo(undo, undone)).toBeNull();
+  });
+
+  it('can’t once a slot it changed is gone', () => {
+    expect(planUndo(undo, state({ slots: after.slots.slice(0, 2) }))).toBeNull();
+  });
+});
+
+describe('capacitiesRefusal', () => {
+  const refused = (code: 'conflict' | 'invalid_input' | 'not_found', field?: string) =>
+    serviceError(code, 'service words', field !== undefined ? { field, received: 'x' } : {});
+  const reasonOf = (e: { details?: Record<string, unknown> }) => e.details?.reason;
+
+  it('reads a slot gone, or one taken since, as a change: stale, or changed for an undo', () => {
+    for (const error of [refused('invalid_input', 'slots'), refused('conflict', 'capacity')]) {
+      expect(reasonOf(capacitiesRefusal(error, 'fix'))).toBe('stale');
+      expect(reasonOf(capacitiesRefusal(error, 'undo'))).toBe('changed');
+    }
+  });
+
+  it('passes anything else on, without the service’s field', () => {
+    expect(capacitiesRefusal(refused('invalid_input', 'slots.0.capacity'), 'fix')).toEqual({
+      code: 'invalid_input',
+      message: 'service words',
+    });
+    expect(capacitiesRefusal(refused('not_found'), 'undo')).toEqual({
+      code: 'not_found',
+      message: 'service words',
     });
   });
 });
