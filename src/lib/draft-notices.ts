@@ -5,6 +5,7 @@
  */
 
 import type { DraftCheckKind, DraftField, DraftNotice, DraftSlot } from './draft-checks';
+import { people } from './signup-summary';
 import { renderFieldValue } from './slot-label';
 
 export interface NoticeContext {
@@ -17,8 +18,6 @@ export interface NoticeText {
   text: string;
 }
 
-const PLACEHOLDER_WORD = /(?<![\p{L}\p{N}_])(TBD|TBC|TBA)(?![\p{L}\p{N}_])/iu;
-
 function slotsPhrase(n: number, one: string, many: string): string {
   return n === 1 ? `One slot ${one}` : `${n} slots ${many}`;
 }
@@ -27,22 +26,13 @@ function labelOf(ctx: NoticeContext, fieldId: string): string {
   return ctx.fields.find((f) => f.id === fieldId)?.label.trim() ?? '';
 }
 
-function people(capacity: number | null): string {
-  if (capacity === null) return 'with no limit';
-  return capacity === 1 ? 'for 1 person' : `for ${capacity} people`;
+/** A field named in a sentence: “What”, or "a field with no name". */
+function fieldName(label: string): string {
+  return label ? `“${label}”` : 'a field with no name';
 }
 
-/** The first placeholder word in these slots, as written ("TBD", "tba"). */
-function placeholderWord(ctx: NoticeContext, slotIds: readonly string[]): string {
-  for (const id of slotIds) {
-    const slot = ctx.slots.find((s) => s.id === id);
-    for (const field of ctx.fields) {
-      const value = slot?.values[field.ref];
-      const match = typeof value === 'string' ? PLACEHOLDER_WORD.exec(value) : null;
-      if (match) return match[1]!.toUpperCase();
-    }
-  }
-  return 'TBD';
+function forPeople(capacity: number | null): string {
+  return capacity === null ? 'with no limit' : `for ${people(capacity)}`;
 }
 
 /** A slot's values as the public page shows them, joined: "Setup · Sat, Nov 14 · 9:00 AM". */
@@ -59,16 +49,16 @@ export function noticeText(notice: DraftNotice, ctx: NoticeContext): NoticeText 
   switch (notice.kind) {
     case 'placeholder': {
       const n = notice.slotIds.length;
-      const word = placeholderWord(ctx, notice.slotIds);
       return {
         kind,
-        text: `${slotsPhrase(n, 'still says', 'still say')} “${word}”, so people would see that on the page. Fill ${n === 1 ? 'it' : 'them'} in, or remove the ${n === 1 ? 'slot' : 'ones'} you don’t need.`,
+        text: `${slotsPhrase(n, 'still says', 'still say')} “${notice.word}”, so people would see that on the page. Fill ${n === 1 ? 'it' : 'them'} in, or remove the ${n === 1 ? 'slot' : 'ones'} you don’t need.`,
       };
     }
     case 'empty_field': {
       const field = ctx.fields.find((f) => f.id === notice.fieldId);
-      const label = field?.label.trim() || 'A field';
-      const base = `“${label}” is empty on every slot, so it adds nothing to the page.`;
+      const label = field?.label.trim() ?? '';
+      const name = label ? `“${label}”` : 'A field with no name';
+      const base = `${name} is empty on every slot, so it adds nothing to the page.`;
       return {
         kind,
         text:
@@ -87,9 +77,21 @@ export function noticeText(notice: DraftNotice, ctx: NoticeContext): NoticeText 
     case 'duplicate_slots': {
       const n = notice.slotIds.length;
       const summary = slotSummary(ctx, notice.values);
+      const one = `One slot ${forPeople(notice.capacity)}`;
+      // Numbered rows ("Lane 1", "Lane 2") may be different things: say only
+      // what's true, and leave the call to the organizer.
+      if (notice.numbered) {
+        const [a, b] = notice.slotIds
+          .slice(0, 2)
+          .map((id) => slotSummary(ctx, ctx.slots.find((s) => s.id === id)?.values ?? {}));
+        return {
+          kind,
+          text: `${n} slots differ only by a number, like “${a}” and “${b}”. If they’re the same job, ${one.charAt(0).toLowerCase()}${one.slice(1)} does it.`,
+        };
+      }
       return {
         kind,
-        text: `${n} slots are the same${summary ? `: ${summary}` : ''}. One slot ${people(notice.capacity)} does the same job.`,
+        text: `${n} slots are the same${summary ? `: ${summary}` : ''}. ${one} does the same job.`,
       };
     }
     case 'unnamed_field': {
@@ -100,20 +102,20 @@ export function noticeText(notice: DraftNotice, ctx: NoticeContext): NoticeText 
       };
     }
     case 'ungrouped_dates': {
-      const label = labelOf(ctx, notice.fieldId) || 'date';
+      const label = labelOf(ctx, notice.fieldId);
       return {
         kind,
-        text: `Several slots share a “${label}”, but the page isn’t grouped by it, so each date shows on every slot.`,
+        text: `Several slots share a ${label ? `“${label}”` : 'date'}, but the page isn’t grouped by it, so each date shows on every slot.`,
       };
     }
     case 'time_in_text': {
-      const label = labelOf(ctx, notice.fieldId);
+      const n = notice.slotIds.length;
       const first = ctx.slots.find((s) => s.id === notice.slotIds[0]);
       const field = ctx.fields.find((f) => f.id === notice.fieldId);
       const example = field ? renderFieldValue(field, first?.values[field.ref]) : null;
       return {
         kind,
-        text: `Some slots have a time typed into “${label}”${example ? `, like “${example}”` : ''}. A time field puts slots in order and times their reminders.`,
+        text: `${slotsPhrase(n, 'has', 'have')} a time typed into ${fieldName(labelOf(ctx, notice.fieldId))}${example ? `, like “${example}”` : ''}. A time field puts slots in order and times their reminders.`,
       };
     }
   }

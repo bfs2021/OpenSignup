@@ -23,7 +23,7 @@ export default function PrivacyPage() {
     <>
       <header className="space-y-2">
         <h1 className="text-3xl font-semibold tracking-tight">Privacy policy</h1>
-        <p className="text-sm text-ink-muted">Last updated: 20 October 2026</p>
+        <p className="text-sm text-ink-muted">Last updated: 21 October 2026</p>
       </header>
 
       <section className="space-y-3">
@@ -58,7 +58,8 @@ export default function PrivacyPage() {
             An append-only activity log of organizer actions (sign-ins, creating and editing
             signups, sending magic links, copying a signup&rsquo;s link, a publish or an AI draft
             that didn&rsquo;t go through), which of your own pages you open and whether on a phone
-            or a computer (never the browser&rsquo;s full identifying string), participant
+            or a computer (never the browser&rsquo;s full identifying string), which kinds of problem
+            the review page pointed out in a draft (never the values themselves), participant
             commitments on your signups, and reminder dispatches. This exists so an organizer can
             audit what happened in their own workspace, so the operator can investigate abuse, and
             so the operator can count, in aggregate, where organizers get stuck between starting a

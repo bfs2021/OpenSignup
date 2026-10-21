@@ -30,7 +30,7 @@ export function ReviewCard({
   return (
     <li
       aria-labelledby={headingId}
-      className={`flex gap-4 rounded-xl border bg-white px-4 py-4 shadow-card sm:px-5 ${
+      className={`group/card flex gap-4 rounded-xl border bg-white px-4 py-4 shadow-card sm:px-5 ${
         editing ? 'border-brand' : 'border-surface-sunk'
       }`}
     >

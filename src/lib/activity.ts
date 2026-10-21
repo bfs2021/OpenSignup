@@ -89,6 +89,42 @@ export async function recordActivityBestEffort(db: Db, args: RecordActivityArgs)
   }
 }
 
+/**
+ * Several telemetry rows at once, best effort as `recordActivityBestEffort`
+ * is: one insert, and one `last_active_at` bump for the organizer.
+ */
+export async function recordActivitiesBestEffort(
+  db: Db,
+  rows: readonly RecordActivityArgs[],
+): Promise<void> {
+  if (rows.length === 0) return;
+  try {
+    await db.insert(activity).values(
+      rows.map((args) => ({
+        id: makeId('act'),
+        signupId: args.signupId ?? null,
+        workspaceId: args.workspaceId ?? null,
+        actorId: args.actor.actorId,
+        actorType: args.actor.actorType,
+        eventType: args.eventType,
+        payload: activityPayload(args.actor, args.payload),
+      })),
+    );
+    const organizerIds = [
+      ...new Set(
+        rows
+          .filter((r) => r.actor.actorType === 'organizer' && r.actor.actorId !== null)
+          .map((r) => r.actor.actorId as string),
+      ),
+    ];
+    for (const id of organizerIds) {
+      await db.update(organizers).set({ lastActiveAt: sql`now()` }).where(eq(organizers.id, id));
+    }
+  } catch (err) {
+    log.warn({ err, eventType: rows[0]!.eventType }, 'recordActivities failed');
+  }
+}
+
 export async function listActivityForSignup(db: Db, signupId: string, limit = 100) {
   return db
     .select()

@@ -56,7 +56,7 @@ by `clientDomain` instead.
 | `signup.viewed` | organizer | `{ device }` (the organizer opening the Build tab, not a participant view; filter on `actor_type = 'system'` to leave these out) | RSC at `/app/signups/[id]/build` |
 | `signup.publish_refused` | organizer | `{ code: 'conflict', reason: 'no_slots' }`, or `{ code: 'conflict', reason: 'not_draft', status }` with the status it had by then (`closed` or `archived` in another tab). A publish of a signup that's already open (a second click, or a retry after one that worked) isn't recorded | `services/signups.ts` (`publishSignup`), after its transaction. A viewer's publish is refused by the policy guard before that and writes nothing |
 | `signup.link_copied` | organizer | `{ surface: 'header', status }` (where the link was copied from, and the signup's status then: a draft's link only says the signup isn't ready) | client beacon from the organizer's pages, via `POST /api/signups/[id]/link-events?event=copied&surface=…`, metered per organizer (60 an hour; past that, copies go uncounted) |
-| `review.notice_shown` | organizer | `{ kind }`: one row per kind of problem the review page found on a draft and showed, each time the page renders (`placeholder`, `empty_field`, `blank_slot`, `duplicate_slots`, `unnamed_field`, `ungrouped_dates`, `time_in_text`; `DRAFT_CHECK_KINDS` in `src/lib/draft-checks.ts`). Never the values | RSC at `/app/signups/[id]`, after the page is sent |
+| `review.notice_shown` | organizer | `{ kind }`: one row per kind of problem the review page found on a draft and showed, each time the page renders (`placeholder`, `empty_field`, `blank_slot`, `duplicate_slots`, `unnamed_field`, `ungrouped_dates`, `time_in_text`; `DRAFT_CHECK_KINDS` in `src/lib/draft-checks.ts`). Never the values. A refresh writes them again, so compare kinds by distinct `signup_id` | RSC at `/app/signups/[id]`, in one insert after the page is sent |
 | `magic_compose.failed` | organizer | `{ code }`: the AI client's `not_configured` \| `rate_limited` \| `upstream` \| `invalid_json` \| `schema_mismatch` \| `timeout` \| `aborted`; `schema_mismatch` too for a draft of the wrong shape; `refusal` when the model declined; `not_saved` when the draft couldn't be saved; `over_limit` when the organizer had used up this instance's Magic Compose quota for the hour. Never the prompt or the model's words | `POST /api/signups/magic-compose`. `signup_id` is `NULL`: no signup was made |
 
 `device` is `'phone'`, `'computer'` or `'unknown'`, from the browser's
@@ -67,8 +67,8 @@ phone can be told apart from ones abandoned at a desk; public views carry
 `uaClass` instead, which separates browsers from bots and says nothing about
 the device.
 
-`signup.publish_refused`, `signup.link_copied` and `magic_compose.failed`
-describe no change, so each is written on its own,
+`signup.publish_refused`, `signup.link_copied`, `magic_compose.failed` and
+`review.notice_shown` describe no change, so each is written on its own,
 outside any transaction, and a failed write never fails the request.
 
 ### Slot / field lifecycle
@@ -370,7 +370,7 @@ edits, `auth.signed_in`, **and** the organizer-side RSC pageview events
 (`signup.editor_opened`, `signup.previewed`, `signup.draft_started`, and the
 Build tab's `signup.viewed`) which are written with the organizer as actor,
 and the organizer's telemetry rows (`signup.publish_refused`,
-`signup.link_copied`, `magic_compose.failed`).
+`signup.link_copied`, `magic_compose.failed`, `review.notice_shown`).
 The public page's `signup.viewed` is system-actor and does not advance
 `last_active_at`.
 

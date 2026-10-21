@@ -15,7 +15,12 @@ export function ReviewNotices({
   builderHref: string;
 }) {
   if (notices.length === 0) {
-    return <p className="text-[13px] text-success">Nothing to fix. This is the list people will see.</p>;
+    // Not under Magic Compose's own warnings, which the card shows just above.
+    return (
+      <p className="text-[13px] text-success group-has-[[data-ai-warnings]]/card:hidden">
+        Nothing to fix. This is the list people will see.
+      </p>
+    );
   }
   return (
     <section aria-labelledby="review-notices" className="flex flex-col gap-2">
@@ -26,7 +31,7 @@ export function ReviewNotices({
         {notices.map((notice, i) => (
           <li
             key={`${notice.kind}-${i}`}
-            className="flex flex-wrap items-center justify-between gap-x-3.5 gap-y-2.5 rounded-lg border border-warn/20 bg-warn/5 px-3.5 py-3"
+            className="flex flex-wrap items-center justify-between gap-x-3.5 gap-y-2.5 rounded-lg border border-warn/30 bg-warn/10 px-3.5 py-3"
           >
             <p className="min-w-0 flex-[1_1_260px] text-[13.5px] leading-normal">{notice.text}</p>
             <Link

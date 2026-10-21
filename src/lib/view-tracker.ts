@@ -2,7 +2,11 @@ import { headers } from 'next/headers';
 import { after } from 'next/server';
 import type { ActivityEvent } from '@/db/schema/activity';
 import { getDb } from '@/db/client';
-import { recordActivityBestEffort, type ActivityActor } from '@/lib/activity';
+import {
+  recordActivitiesBestEffort,
+  recordActivityBestEffort,
+  type ActivityActor,
+} from '@/lib/activity';
 import type { LandingCta } from '@/lib/landing-cta';
 
 const BOT_RE =
@@ -203,13 +207,14 @@ export async function recordNoticesShown(args: {
   workspaceId: string | null;
   kinds: readonly string[];
 }): Promise<void> {
-  for (const kind of new Set(args.kinds)) {
-    await recordActivityBestEffort(getDb(), {
+  await recordActivitiesBestEffort(
+    getDb(),
+    [...new Set(args.kinds)].map((kind) => ({
       actor: args.actor,
       signupId: args.signupId,
       workspaceId: args.workspaceId,
-      eventType: 'review.notice_shown',
+      eventType: 'review.notice_shown' as const,
       payload: { kind },
-    });
-  }
+    })),
+  );
 }

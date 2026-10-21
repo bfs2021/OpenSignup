@@ -66,7 +66,7 @@ describe('findPlaceholders', () => {
       ],
     );
     expect(findPlaceholders(input)).toEqual([
-      { kind: 'placeholder', slotIds: ['s1', 's2', 's4', 's5'] },
+      { kind: 'placeholder', slotIds: ['s1', 's2', 's4', 's5'], word: 'TBD' },
     ]);
   });
 
@@ -91,7 +91,7 @@ describe('findPlaceholders', () => {
       [status, count],
       [slot('s1', { status: 'TBA' }), slot('s2', { status: 'Confirmed', count: 3 })],
     );
-    expect(findPlaceholders(input)).toEqual([{ kind: 'placeholder', slotIds: ['s1'] }]);
+    expect(findPlaceholders(input)).toEqual([{ kind: 'placeholder', slotIds: ['s1'], word: 'TBA' }]);
   });
 
   it('only reads the signup’s own fields', () => {
@@ -187,6 +187,7 @@ describe('findDuplicateSlots', () => {
         keepSlotId: 's1',
         capacity: 5,
         values: { role: 'Setup', date: '2026-11-07' },
+        numbered: false,
       },
     ]);
   });
@@ -200,6 +201,7 @@ describe('findDuplicateSlots', () => {
         keepSlotId: 's1',
         capacity: 2,
         values: { role: 'Setup' },
+        numbered: false,
       },
     ]);
   });
@@ -235,6 +237,7 @@ describe('findDuplicateSlots', () => {
         keepSlotId: 's1',
         capacity: 2,
         values: { role: 'Cleanup' },
+        numbered: false,
       },
       {
         kind: 'duplicate_slots',
@@ -242,6 +245,7 @@ describe('findDuplicateSlots', () => {
         keepSlotId: 's2',
         capacity: 2,
         values: { role: 'Setup' },
+        numbered: false,
       },
     ]);
   });
@@ -258,6 +262,7 @@ describe('findDuplicateSlots', () => {
         keepSlotId: 's1',
         capacity: null,
         values: { role: 'Setup' },
+        numbered: false,
       },
     ]);
   });
@@ -298,6 +303,7 @@ describe('findDuplicateSlots', () => {
         keepSlotId: 's1',
         capacity: 2,
         values: { role: 'Setup' },
+        numbered: false,
       },
     ]);
   });
@@ -325,6 +331,7 @@ describe('findDuplicateSlots', () => {
           keepSlotId: 's1',
           capacity: 3,
           values: { role: 'Helper', date: '2026-11-07' },
+          numbered: true,
         },
       ]);
     });
@@ -355,7 +362,9 @@ describe('findDuplicateSlots', () => {
         ],
       );
       expect(findDuplicateSlots(input)).toEqual([]);
-      expect(checkDraft(input)).toEqual([{ kind: 'placeholder', slotIds: ['s1', 's2', 's3'] }]);
+      expect(checkDraft(input)).toEqual([
+        { kind: 'placeholder', slotIds: ['s1', 's2', 's3'], word: 'TBD' },
+      ]);
     });
 
     it('leaves "Game 1" and "Game 2" alone on different dates', () => {
@@ -614,7 +623,7 @@ describe('checkDraft', () => {
       ],
     );
     expect(checkDraft(input)).toEqual([
-      { kind: 'placeholder', slotIds: ['s1'] },
+      { kind: 'placeholder', slotIds: ['s1'], word: 'TBD' },
       { kind: 'empty_field', fieldId: 'fld_notes', ref: 'notes' },
       { kind: 'blank_slot', slotIds: ['s2'] },
       {
@@ -623,6 +632,7 @@ describe('checkDraft', () => {
         keepSlotId: 's3',
         capacity: 2,
         values: { role: 'Setup', date: '2026-11-07', when: 'Morning' },
+        numbered: false,
       },
       { kind: 'unnamed_field', fieldId: 'fld_notes' },
       { kind: 'ungrouped_dates', fieldId: 'fld_date', ref: 'date' },
@@ -645,5 +655,39 @@ describe('checkDraft', () => {
 
   it('is empty for a draft with no fields or slots', () => {
     expect(checkDraft(draft([], []))).toEqual([]);
+  });
+});
+
+describe('near misses found in review', () => {
+  it('never counts a closed slot as a copy of an open one', () => {
+    const input = draft(
+      [role],
+      [
+        { ...slot('s1', { role: 'Setup' }, 2), status: 'open' },
+        { ...slot('s2', { role: 'Setup' }, 3), status: 'closed' },
+      ],
+    );
+    expect(findDuplicateSlots(input)).toEqual([]);
+  });
+
+  it('marks numbered rows as numbered, so the page can say they differ only by a number', () => {
+    const input = draft([role], [slot('s1', { role: 'Lane 1' }), slot('s2', { role: 'Lane 2' })]);
+    expect(findDuplicateSlots(input)).toMatchObject([{ numbered: true, values: { role: 'Lane' } }]);
+  });
+
+  it('leaves grouping alone when most dates have one slot each', () => {
+    const dates = ['01', '02', '03', '04', '05', '06', '07', '08', '09', '10'];
+    const slots = dates.map((d, i) => slot(`s${i}`, { role: 'Snacks', date: `2026-11-${d}` }));
+    slots.push(slot('s10', { role: 'Drinks', date: '2026-11-01' }));
+    expect(findUngroupedDates(draft([role, date], slots))).toEqual([]);
+  });
+
+  it('reads a bare clock time only when its minutes are on a five', () => {
+    expect(
+      findTimeInText(draft([role], [slot('s1', { role: 'John 3:16' }), slot('s2', { role: 'Final 21:14' })])),
+    ).toEqual([]);
+    expect(findTimeInText(draft([role], [slot('s1', { role: 'Setup 9:05' })]))).toMatchObject([
+      { kind: 'time_in_text', slotIds: ['s1'] },
+    ]);
   });
 });

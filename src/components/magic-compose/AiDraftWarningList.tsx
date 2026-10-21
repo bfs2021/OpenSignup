@@ -16,6 +16,7 @@ export function AiDraftWarningList({
   return (
     <div
       role="status"
+      data-ai-warnings
       className="border-warn/30 bg-warn/10 text-ink flex items-start gap-3 rounded-lg border px-5 py-4 text-sm"
     >
       <div className="min-w-0 flex-1">

@@ -140,9 +140,9 @@ export function CreateAndPublishASignup() {
             </p>
             <Screenshot
               src="/help/create-and-publish-a-signup/check-your-signup.png"
-              alt="Check your signup, then share it, with the signup's name, its two slots and what happens when someone signs up."
+              alt="Check your signup, then share it, with the signup's name, its two slots, nothing to fix, and what happens when someone signs up."
               width={760}
-              height={529}
+              height={557}
             />
           </Step>
           <Step>

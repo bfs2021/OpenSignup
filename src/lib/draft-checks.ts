@@ -30,6 +30,8 @@ export interface DraftSlot {
   values: Record<string, unknown>;
   /** null = no limit. */
   capacity: number | null;
+  /** 'open' when left out. A closed slot is never one of a group of copies. */
+  status?: string;
 }
 
 export interface DraftInput {
@@ -39,8 +41,8 @@ export interface DraftInput {
 }
 
 export type DraftNotice =
-  /** Slots still holding a TBD/TBC/TBA the organizer has to fill in. */
-  | { kind: 'placeholder'; slotIds: string[] }
+  /** Slots still holding a TBD/TBC/TBA the organizer has to fill in; `word` is the first, in capitals. */
+  | { kind: 'placeholder'; slotIds: string[]; word: string }
   /** A field no slot has a value for. Fix: delete the field. */
   | { kind: 'empty_field'; fieldId: string; ref: string }
   /** Slots with no value in any field. Fix: delete them. */
@@ -48,7 +50,9 @@ export type DraftNotice =
   /**
    * Rows that are copies of one another. Fix: give `keepSlotId` these
    * `values` and `capacity` (the copies' total, null when any had no limit),
-   * and delete the other `slotIds`.
+   * and delete the other `slotIds`. `numbered` rows ("Helper 1", "Helper 2")
+   * differ by their number, which may or may not mean something, so the
+   * page says so rather than calling them the same.
    */
   | {
       kind: 'duplicate_slots';
@@ -56,6 +60,7 @@ export type DraftNotice =
       keepSlotId: string;
       capacity: number | null;
       values: Record<string, unknown>;
+      numbered: boolean;
     }
   /** A field with no name, or still the builder's default one. */
   | { kind: 'unnamed_field'; fieldId: string }
@@ -83,19 +88,30 @@ function isBlank(slot: DraftSlot, fields: readonly DraftField[]): boolean {
 }
 
 // Not inside another word, in any script: "ÉTBA" and "TBD1" are not placeholders.
-const PLACEHOLDER = /(?<![\p{L}\p{N}_])(?:TBD|TBC|TBA)(?![\p{L}\p{N}_])/iu;
+const PLACEHOLDER = /(?<![\p{L}\p{N}_])(TBD|TBC|TBA)(?![\p{L}\p{N}_])/iu;
+
+/** The first placeholder word in the slot's values, or null. */
+function placeholderIn(slot: DraftSlot, fields: readonly DraftField[]): string | null {
+  for (const f of fields) {
+    const value = slot.values[f.ref];
+    const match = typeof value === 'string' ? PLACEHOLDER.exec(value) : null;
+    if (match) return match[1]!.toUpperCase();
+  }
+  return null;
+}
 
 function holdsPlaceholder(slot: DraftSlot, fields: readonly DraftField[]): boolean {
-  return fields.some((f) => {
-    const value = slot.values[f.ref];
-    return typeof value === 'string' && PLACEHOLDER.test(value);
-  });
+  return placeholderIn(slot, fields) !== null;
 }
 
 /** Slots with a string value containing TBD, TBC or TBA as a word, any case. */
 export function findPlaceholders({ fields, slots }: DraftInput): DraftNoticeOf<'placeholder'>[] {
-  const slotIds = slots.filter((s) => holdsPlaceholder(s, fields)).map((s) => s.id);
-  return slotIds.length > 0 ? [{ kind: 'placeholder', slotIds }] : [];
+  const found = slots
+    .map((s) => ({ id: s.id, word: placeholderIn(s, fields) }))
+    .filter((s): s is { id: string; word: string } => s.word !== null);
+  return found.length > 0
+    ? [{ kind: 'placeholder', slotIds: found.map((s) => s.id), word: found[0]!.word }]
+    : [];
 }
 
 /** Fields empty on every slot, when there is at least one slot. */
@@ -122,6 +138,7 @@ const NUMBERED = /^(.*?)(?:\s+#?|\s*#)(\d+)$/;
 interface CopyGroup {
   members: DraftSlot[];
   values: Record<string, unknown>;
+  numbered: boolean;
 }
 
 /** Groups of slots whose normalized values are identical in every field. */
@@ -135,7 +152,7 @@ function exactCopies(candidates: readonly DraftSlot[], fields: readonly DraftFie
   }
   return [...byKey.values()]
     .filter((members) => members.length >= 2)
-    .map((members) => ({ members, values: { ...members[0]!.values } }));
+    .map((members) => ({ members, values: { ...members[0]!.values }, numbered: false }));
 }
 
 /**
@@ -172,7 +189,7 @@ function numberedCopies(
     const countsFromOne = entries.every((_, i) => numbers.has(i + 1));
     if (!countsFromOne) continue;
     const members = entries.map(([slot]) => slot);
-    groups.push({ members, values: { ...members[0]!.values, [ref]: base } });
+    groups.push({ members, values: { ...members[0]!.values, [ref]: base }, numbered: true });
   }
 
   const seen = new Map<string, number>();
@@ -202,15 +219,17 @@ function missesOthersValues(
 /**
  * Rows that are copies: identical in every field (strings trimmed), or
  * capacity-1 rows numbered "Helper 1", "Helper 2"…. Rows holding a
- * placeholder, blank rows, and rows missing a value other slots have are
- * never copies. One notice per group, ordered by the slot it keeps (the
- * group's first).
+ * placeholder, blank rows, closed rows, and rows missing a value other slots
+ * have are never copies. One notice per group, ordered by the slot it keeps
+ * (the group's first).
  */
 export function findDuplicateSlots({
   fields,
   slots,
 }: DraftInput): DraftNoticeOf<'duplicate_slots'>[] {
-  const candidates = slots.filter((s) => !isBlank(s, fields) && !holdsPlaceholder(s, fields));
+  const candidates = slots.filter(
+    (s) => s.status !== 'closed' && !isBlank(s, fields) && !holdsPlaceholder(s, fields),
+  );
   const exact = exactCopies(candidates, fields);
   const inExact = new Set(exact.flatMap(({ members }) => members.map((s) => s.id)));
   const numbered = numberedCopies(
@@ -222,7 +241,7 @@ export function findDuplicateSlots({
   return [...exact, ...numbered]
     .filter(({ members }) => !missesOthersValues(members, fields, slots))
     .sort((a, b) => position.get(a.members[0]!.id)! - position.get(b.members[0]!.id)!)
-    .map(({ members, values }) => ({
+    .map(({ members, values, numbered }) => ({
       kind: 'duplicate_slots',
       slotIds: members.map((s) => s.id),
       keepSlotId: members[0]!.id,
@@ -230,6 +249,7 @@ export function findDuplicateSlots({
         ? null
         : members.reduce((sum, s) => sum + (s.capacity ?? 0), 0),
       values,
+      numbered,
     }));
 }
 
@@ -245,9 +265,10 @@ export function findUnnamedFields({ fields }: DraftInput): DraftNoticeOf<'unname
 }
 
 /**
- * The first date field with at least two distinct dates, one of them on two
- * or more slots, while the page is not grouped (no group field, or one that
- * no longer exists).
+ * The first date field with at least two distinct dates, at least half of
+ * them on two or more slots, while the page is not grouped (no group field,
+ * or one that no longer exists). With most dates on one slot each, grouping
+ * would only make one-slot groups.
  */
 export function findUngroupedDates({
   fields,
@@ -265,7 +286,8 @@ export function findUngroupedDates({
       const key = JSON.stringify(normalize(value));
       counts.set(key, (counts.get(key) ?? 0) + 1);
     }
-    if (counts.size >= 2 && [...counts.values()].some((n) => n >= 2)) {
+    const repeated = [...counts.values()].filter((n) => n >= 2).length;
+    if (counts.size >= 2 && repeated * 2 >= counts.size) {
       return [{ kind: 'ungrouped_dates', fieldId: field.id, ref: field.ref }];
     }
   }
@@ -274,7 +296,9 @@ export function findUngroupedDates({
 
 // "9:00", "14:30", or an hour with am/pm: "9am", "9 a.m.", "9:30pm", "10.30am".
 // Not after a digit, ":" or ".", so "11:30" is read whole and "1.5" is no time.
-const CLOCK = String.raw`(?:[01]?\d|2[0-3]):[0-5]\d(?!\p{N})`;
+// A bare clock time needs its minutes on a five ("9:05", "14:30"), as a
+// schedule's are: "John 3:16" and a 21:14 score are not times of day.
+const CLOCK = String.raw`(?:[01]?\d|2[0-3]):[0-5][05](?!\p{N})`;
 const MERIDIEM = String.raw`(?:0?[1-9]|1[0-2])(?:[:.][0-5]\d)?\s?[ap]\.?\s?m\.?(?![\p{L}\p{N}])`;
 const TIME_OF_DAY = new RegExp(String.raw`(?<![\p{N}:.])(?:${CLOCK}|${MERIDIEM})`, 'iu');
 

@@ -88,7 +88,29 @@ describe('noticeText', () => {
 
   it('quotes a time typed into a text field', () => {
     expect(texts([what], [slot('a', { what: 'Morning 9am' }), slot('b', { what: 'Afternoon' })])).toEqual([
-      'Some slots have a time typed into “What”, like “Morning 9am”. A time field puts slots in order and times their reminders.',
+      'One slot has a time typed into “What”, like “Morning 9am”. A time field puts slots in order and times their reminders.',
+    ]);
+  });
+});
+
+describe('noticeText near misses', () => {
+  it('says numbered rows differ only by a number, quoting two of them', () => {
+    expect(
+      texts([what], [slot('a', { what: 'Lane 1' }), slot('b', { what: 'Lane 2' }), slot('c', { what: 'Lane 3' })]),
+    ).toEqual([
+      '3 slots differ only by a number, like “Lane 1” and “Lane 2”. If they’re the same job, one slot for 3 people does it.',
+    ]);
+  });
+
+  it('never prints empty quotes for a field with no name', () => {
+    const blank: DraftField = { id: 'f_b', ref: 'b', label: ' ', fieldType: 'text' };
+    expect(texts([what, blank], [slot('a', { what: 'Setup' }), slot('b', { what: 'Till' })])).toEqual([
+      'A field with no name is empty on every slot, so it adds nothing to the page. If it was for people to fill in: they give their own name and email when they sign up.',
+      'A field has no name yet.',
+    ]);
+    expect(texts([blank], [slot('a', { b: 'at 9am' }), slot('c', { b: 'Noon' })])).toEqual([
+      'A field has no name yet.',
+      'One slot has a time typed into a field with no name, like “at 9am”. A time field puts slots in order and times their reminders.',
     ]);
   });
 });

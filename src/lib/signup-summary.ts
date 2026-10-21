@@ -65,7 +65,8 @@ function isBlank(raw: unknown): boolean {
   return raw === undefined || raw === null || raw === '';
 }
 
-function people(n: number): string {
+/** "1 person", "3 people". */
+export function people(n: number): string {
   return n === 1 ? '1 person' : `${n} people`;
 }
 
@@ -233,8 +234,9 @@ export function hasFilledSlot({
   fields,
   slots,
 }: Pick<SignupSummaryInput, 'fields' | 'slots'>): boolean {
+  // Whitespace counts as empty, as the draft checks read it.
   return slots.some((slot) =>
-    fields.some((field) => renderFieldValue(field, slot.values[field.ref]) !== null),
+    fields.some((field) => !!renderFieldValue(field, slot.values[field.ref])?.trim()),
   );
 }
 

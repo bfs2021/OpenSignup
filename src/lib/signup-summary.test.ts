@@ -346,6 +346,9 @@ describe('hasFilledSlot', () => {
     expect(
       hasFilledSlot({ fields: [what], slots: [{ id: 's1', values: { what: '' }, capacity: 1 }] }),
     ).toBe(false);
+    expect(
+      hasFilledSlot({ fields: [what], slots: [{ id: 's1', values: { what: '   ' }, capacity: 1 }] }),
+    ).toBe(false);
   });
 
   it('is true once any slot has a value in any field', () => {
