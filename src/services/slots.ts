@@ -10,7 +10,6 @@ import { requireWorkspaceWrite, type Actor } from '@/lib/policy';
 import { err, ok, type Result } from '@/lib/result';
 import { toSlug } from '@/lib/slug';
 import {
-  type SlotStatus,
   type SlotUpdateInput,
   SlotBulkInputSchema,
   SlotCreateInputSchema,
@@ -223,13 +222,12 @@ export async function insertSlot(
     capacity: number | null;
     sortOrder: number;
     slotAt: Date | null;
-    status?: SlotStatus;
   },
 ): Promise<SlotRow> {
   const ref = await pickAvailableRef(tx, row.signupId, summarizeValues(row.values));
   const [inserted] = await tx
     .insert(slots)
-    .values({ ...row, id: makeId('slot'), ref, status: row.status ?? 'open' })
+    .values({ ...row, id: makeId('slot'), ref, status: 'open' })
     .returning();
   if (!inserted) throw new Error('slot insert failed');
   return inserted;

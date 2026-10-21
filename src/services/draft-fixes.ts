@@ -6,6 +6,7 @@ import {
   draftInputOf,
   findNoticeFor,
   labelProblem,
+  mergeRefusal,
   mergeRequestFor,
   planUndo,
   type DraftState,
@@ -47,27 +48,6 @@ export interface AppliedDraftFix {
 
 function conflict(reason: 'not_draft' | 'stale' | 'changed', message: string): ServiceError {
   return serviceError('conflict', message, { details: { reason } });
-}
-
-/**
- * A refusal from `mergeSlots` or `unmergeSlots` in the words the page uses
- * for the others. Both check under their locks what the checks here read
- * without them, so a refusal means the signup changed in between: published
- * (its status), or, for a merge, a copy deleted, closed or no longer
- * accepted; for an undo, the kept slot deleted or its capacity changed. A
- * value an undo can't put back (a field deleted since) stays as it is.
- */
-function fromMerge(error: ServiceError, step: 'fix' | 'undo'): ServiceError {
-  if (error.code === 'conflict' && error.field === 'status') {
-    return conflict('not_draft', error.message);
-  }
-  if (step === 'undo') {
-    return error.code === 'conflict' ? conflict('changed', error.message) : error;
-  }
-  // Not a total too big for one slot, which no change could have caused.
-  const changed =
-    (error.code === 'conflict' && error.field !== 'capacity') || error.code === 'invalid_input';
-  return changed ? conflict('stale', error.message) : error;
 }
 
 /** The signup, fresh, for someone who may change it, while it's a draft. */
@@ -146,7 +126,7 @@ export async function applyDraftFix(
     label = request.label.trim();
   }
 
-  const fixed = await fix(db, actor, signupId, found, label, state);
+  const fixed = await fix(db, actor, signupId, found, label);
   if (!fixed.ok) return fixed;
   const { notice, unmerge } = fixed.value;
 
@@ -174,7 +154,6 @@ async function fix(
   signupId: string,
   notice: FixableNotice,
   label: string,
-  before: DraftState,
 ): Promise<Result<{ notice: FixableNotice; unmerge?: SlotUnmergeInput }, ServiceError>> {
   switch (notice.kind) {
     case 'empty_field': {
@@ -217,8 +196,8 @@ async function fix(
     case 'duplicate_slots': {
       // All or nothing, in one transaction, the total worked out from the
       // rows as locked.
-      const r = await mergeSlots(db, actor, signupId, mergeRequestFor(notice, before));
-      if (!r.ok) return err(fromMerge(r.error, 'fix'));
+      const r = await mergeSlots(db, actor, signupId, mergeRequestFor(notice));
+      if (!r.ok) return err(mergeRefusal(r.error, 'fix'));
       return ok({ notice: { ...notice, capacity: r.value.slot.capacity }, unmerge: r.value.undo });
     }
   }
@@ -304,7 +283,7 @@ async function undo(
     }
     case 'duplicate_slots': {
       const r = await unmergeSlots(db, actor, signupId, plan.unmerge);
-      return r.ok ? ok(null) : err(fromMerge(r.error, 'undo'));
+      return r.ok ? ok(null) : err(mergeRefusal(r.error, 'undo'));
     }
   }
 }

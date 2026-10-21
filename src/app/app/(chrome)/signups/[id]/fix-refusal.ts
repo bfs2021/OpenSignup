@@ -13,7 +13,9 @@ export function fixRefusal(error: ServiceError, step: 'fix' | 'undo'): string {
   if (reason === 'not_draft') {
     return 'This signup isn’t a draft any more. Change it in the builder.';
   }
-  if (error.code === 'invalid_input' && error.field === 'label') {
+  // Only a fix takes a name: an undo's refusal on a field called "label" is
+  // not about the rename box.
+  if (step === 'fix' && error.code === 'invalid_input' && error.field === 'label') {
     if (reason === 'untitled') return 'Give it a name other than “Untitled”.';
     if (reason === 'too_long') return `The name can be up to ${LABEL_MAX_LENGTH} letters.`;
     return 'Type a name for the field.';
@@ -35,7 +37,10 @@ export function fixRefusal(error: ServiceError, step: 'fix' | 'undo'): string {
       if (reason === 'stale') {
         return 'That changed since you opened this page, so nothing was done.';
       }
-      return SAVE_ERROR_MESSAGE.conflict;
+      // A fix the services won't take as asked: not a change to reload for.
+      return error.code === 'conflict'
+        ? SAVE_ERROR_MESSAGE.conflict
+        : 'Couldn’t fix that. Try again.';
     default:
       return step === 'fix' ? 'Couldn’t fix that. Try again.' : 'Couldn’t undo that. Try again.';
   }

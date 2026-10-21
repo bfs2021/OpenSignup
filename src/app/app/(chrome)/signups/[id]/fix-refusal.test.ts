@@ -25,6 +25,19 @@ describe('fixRefusal', () => {
     expect(fixRefusal(serviceError('invalid_input', 'unknown field ref "x"'), 'undo')).toBe(
       'Couldn’t undo that. Change it in the builder.',
     );
+    // Even on a field called "label": only a fix takes a name.
+    expect(
+      fixRefusal(
+        serviceError('invalid_input', 'x', { field: 'label', ...reason('blank') }),
+        'undo',
+      ),
+    ).toBe('Couldn’t undo that. Change it in the builder.');
+  });
+
+  it('says a fix the services won’t take as asked couldn’t be done, not to reload', () => {
+    expect(fixRefusal(serviceError('invalid_input', 'values do not fit the fields'), 'fix')).toBe(
+      'Couldn’t fix that. Try again.',
+    );
   });
 
   it('sends a signup that is no longer a draft to the builder', () => {

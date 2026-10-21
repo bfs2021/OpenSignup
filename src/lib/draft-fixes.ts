@@ -10,6 +10,7 @@
  * back loses only its id and its internal `ref`, neither of which anyone sees.
  */
 
+import { serviceError, type ServiceError } from '@/lib/errors';
 import type { DraftFixKind, DraftFixRequest, DraftFixUndo } from '@/schemas/draft-fixes';
 import type { SlotUnmergeInput } from '@/schemas/slots';
 import {
@@ -19,7 +20,6 @@ import {
 } from '@/schemas/slot-fields';
 import {
   findBlankSlots,
-  findDuplicateSlots,
   isEmpty,
   type DraftInput,
   type DraftNotice,
@@ -130,30 +130,46 @@ export function fixRequestFor(notice: DraftNotice): DraftFixRequest | null {
   }
 }
 
-/** Whether two slots' values say the same thing, whatever order their keys are in. */
-function sameValues(a: Record<string, unknown>, b: Record<string, unknown>): boolean {
-  const keys = Object.keys(a);
-  return (
-    keys.length === Object.keys(b).length &&
-    keys.every((k) => Object.hasOwn(b, k) && JSON.stringify(a[k]) === JSON.stringify(b[k]))
-  );
+/**
+ * What `mergeSlots` is asked for to merge a notice's copies: the slot it
+ * keeps, every copy, and for numbered rows the values without the number
+ * ("Helper 1" becomes "Helper"). Identical rows keep the kept slot's own
+ * values, which are the notice's.
+ */
+export function mergeRequestFor(notice: DraftNoticeOf<'duplicate_slots'>): {
+  keepSlotId: string;
+  slotIds: string[];
+  values?: Record<string, unknown>;
+} {
+  const request = { keepSlotId: notice.keepSlotId, slotIds: notice.slotIds };
+  return notice.numbered ? { ...request, values: notice.values } : request;
 }
 
 /**
- * What `mergeSlots` is asked for to merge a notice's copies: the slot it
- * keeps, every copy, and the values the kept slot ends up with when they
- * aren't the ones it has. Only numbered rows change them ("Helper 1" becomes
- * "Helper"); identical rows keep the kept slot's own.
+ * A refusal from `mergeSlots` or `unmergeSlots`, as the page words the
+ * others' (`details.reason`). Only what a change made since causes reads as
+ * one: for a merge, a slot gone, closed, booked or no longer a copy
+ * ('stale'); for an undo, the kept slot gone or changed ('changed'); for
+ * either, a signup no longer a draft. Anything else can't be waited out, so
+ * it isn't called a change, which would offer the same button again: a merge
+ * becomes a plain `invalid_input`. The service's `field` never passes on: it
+ * can be a slot field's ref, and a ref of 'label' would read as the rename
+ * box's refusal.
  */
-export function mergeRequestFor(
-  notice: DraftNoticeOf<'duplicate_slots'>,
-  before: DraftState,
-): { keepSlotId: string; slotIds: string[]; values?: Record<string, unknown> } {
-  const kept = before.slots.find((s) => s.id === notice.keepSlotId);
-  const request = { keepSlotId: notice.keepSlotId, slotIds: notice.slotIds };
-  return kept && sameValues(kept.values, notice.values)
-    ? request
-    : { ...request, values: notice.values };
+export function mergeRefusal(error: ServiceError, step: 'fix' | 'undo'): ServiceError {
+  const { code, message } = error;
+  const because = (reason: 'not_draft' | 'stale' | 'changed') =>
+    serviceError('conflict', message, { details: { reason } });
+  if (code === 'conflict' && error.field === 'status') return because('not_draft');
+  if (step === 'undo')
+    return code === 'conflict' ? because('changed') : serviceError(code, message);
+  // Every conflict but a total too big for one slot, which no change caused;
+  // and a slot that is no longer there.
+  const raced =
+    (code === 'conflict' && error.field !== 'capacity') ||
+    (code === 'invalid_input' && error.field === 'slotIds');
+  if (raced) return because('stale');
+  return serviceError(code === 'conflict' ? 'invalid_input' : code, message);
 }
 
 /**
@@ -338,28 +354,10 @@ export function planUndo(undo: DraftFixUndo, now: DraftState): UndoPlan | null {
       if (only !== undo.ref || rest.length > 0) return null;
       return { kind: 'ungrouped_dates', groupByFieldRefs: undo.previous };
     }
-    case 'duplicate_slots': {
-      // `unmergeSlots` checks the first two again under its locks.
-      const { keepSlotId, previous, restored } = undo.unmerge;
-      const kept = now.slots.find((s) => s.id === keepSlotId);
-      if (!kept) return null;
-      const capacities = [previous.capacity, ...restored.map((r) => r.capacity)];
-      const merged = capacities.some((c) => c === null)
-        ? null
-        : capacities.reduce<number>((sum, c) => sum + (c ?? 0), 0);
-      if (kept.capacity !== merged) return null;
-      // An undo that already ran (its answer lost, say) gave the kept slot
-      // its own capacity back, so the check above refuses it again, except
-      // when that was no limit: the total is no limit too. Then the copies
-      // being back is what tells, and putting them back again would double
-      // them.
-      if (
-        previous.capacity === null &&
-        findDuplicateSlots(draftInputOf(now)).some((n) => n.slotIds.includes(keepSlotId))
-      ) {
-        return null;
-      }
+    case 'duplicate_slots':
+      // Whether the kept slot changed since (its values, places, position, an
+      // undo already made) is `unmergeSlots`' to say, under its lock.
+      if (!now.slots.some((s) => s.id === undo.unmerge.keepSlotId)) return null;
       return { kind: 'duplicate_slots', unmerge: undo.unmerge };
-    }
   }
 }

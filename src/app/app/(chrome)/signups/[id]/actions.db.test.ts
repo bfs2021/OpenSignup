@@ -15,7 +15,7 @@ import { DEFAULT_TEMPLATE, type SignupTemplate } from '@/lib/signup-templates';
 import type { DraftFixKind, DraftFixRequest, DraftFixUndo } from '@/schemas/draft-fixes';
 import { createSignup, publishSignup } from '@/services/signups';
 import { listFieldsForSignup, updateField } from '@/services/slot-fields';
-import { updateSlot } from '@/services/slots';
+import { addSlot, updateSlot } from '@/services/slots';
 import {
   applyDraftFixAction,
   deleteSignupAction,
@@ -694,6 +694,32 @@ describe('applyDraftFixAction and undoDraftFixAction (db)', () => {
     ).toEqual({ error: 'Give it a name other than “Untitled”.' });
     expect(await snapshot(id)).toEqual(before);
     expect(await events(id, 'review.notice_accepted')).toHaveLength(0);
+  });
+
+  it('undoes a merge even after a copy of the merged slot was added since', async () => {
+    const scenario = SCENARIOS.duplicate_slots;
+    const { id, before } = await draftFor(scenario);
+    const applied = await applyDraftFixAction(id, scenario.request(before));
+    if ('error' in applied) throw new Error(applied.error);
+    const copy = await addSlot(db, owner, id, {
+      values: { what: 'Helper', date: '2030-11-14' },
+      capacity: 3,
+    });
+    if (!copy.ok) throw new Error(copy.error.message);
+
+    expect(await undoDraftFixAction(id, applied.undo)).toBeNull();
+    // Every slot back, and the new copy kept. The copy took the next place
+    // free, which a slot put back shares, so the order of those two is the
+    // order they were made in.
+    const rows = (s: Snapshot) =>
+      s.slots.map(({ values, capacity }) => JSON.stringify({ values, capacity })).sort();
+    expect(rows(await snapshot(id))).toEqual(
+      [
+        ...rows(before),
+        // In the key order the database gives back.
+        JSON.stringify({ values: { date: '2030-11-14', what: 'Helper' }, capacity: 3 }),
+      ].sort(),
+    );
   });
 
   it('keeps the merged slot when undo finds its places changed since, and says so', async () => {

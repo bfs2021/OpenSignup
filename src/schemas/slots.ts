@@ -93,22 +93,29 @@ export const SlotMergeInputSchema = z
 
 /**
  * What undoes a merge, as `mergeSlots` returns it: the kept slot's values and
- * capacity before the merge, and the slots it deleted, in the order they were
- * shown.
+ * capacity before the merge, the slots it deleted in the order they were
+ * shown (all open: a merge refuses a closed slot), and when the merge last
+ * wrote the kept slot, `keptUpdatedAt`. Any later change to that slot (its
+ * values, its places, its position, an undo already made) moves its
+ * `updatedAt`, and the undo is refused.
  */
-export const SlotUnmergeInputSchema = z.object({
-  keepSlotId: z.string().min(1),
-  previous: z.object({ values: SlotValuesSchema, capacity: CapacitySchema }),
-  restored: z
-    .array(
-      z.object({
-        values: SlotValuesSchema,
-        capacity: CapacitySchema,
-        sortOrder: SortOrderSchema,
-        status: z.enum(SLOT_STATUSES).default('open'),
-      }),
-    )
-    .min(1)
-    .max(MAX_MERGE_SLOTS - 1),
-});
+export const SlotUnmergeInputSchema = z
+  .object({
+    keepSlotId: z.string().min(1),
+    keptUpdatedAt: z.string().datetime(),
+    previous: z.object({ values: SlotValuesSchema, capacity: CapacitySchema }).strict(),
+    restored: z
+      .array(
+        z
+          .object({
+            values: SlotValuesSchema,
+            capacity: CapacitySchema,
+            sortOrder: SortOrderSchema,
+          })
+          .strict(),
+      )
+      .min(1)
+      .max(MAX_MERGE_SLOTS - 1),
+  })
+  .strict();
 export type SlotUnmergeInput = z.infer<typeof SlotUnmergeInputSchema>;

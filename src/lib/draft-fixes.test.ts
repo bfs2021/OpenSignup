@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { DraftFixUndo } from '@/schemas/draft-fixes';
+import { serviceError } from '@/lib/errors';
 import type { SlotFieldDefinition } from '@/schemas/slot-fields';
 import type { SlotUnmergeInput } from '@/schemas/slots';
 import { checkDraft, type DraftNotice, type DraftNoticeOf } from './draft-checks';
@@ -9,6 +10,7 @@ import {
   findNoticeFor,
   fixRequestFor,
   labelProblem,
+  mergeRefusal,
   mergeRequestFor,
   planUndo,
   restoredLabel,
@@ -189,7 +191,7 @@ describe('mergeRequestFor', () => {
         slot('c', { what: 'Till' }),
       ],
     });
-    expect(mergeRequestFor(only(before, 'duplicate_slots'), before)).toEqual({
+    expect(mergeRequestFor(only(before, 'duplicate_slots'))).toEqual({
       keepSlotId: 'a',
       slotIds: ['a', 'b'],
     });
@@ -203,11 +205,67 @@ describe('mergeRequestFor', () => {
         slot('c', { what: 'Setup', date: '2030-11-14' }),
       ],
     });
-    expect(mergeRequestFor(only(before, 'duplicate_slots'), before)).toEqual({
+    expect(mergeRequestFor(only(before, 'duplicate_slots'))).toEqual({
       keepSlotId: 'a',
       slotIds: ['a', 'b'],
       values: { date: '2030-11-14', what: 'Helper' },
     });
+  });
+});
+
+describe('mergeRefusal', () => {
+  const refused = (code: 'conflict' | 'invalid_input' | 'not_found', field?: string) =>
+    serviceError(code, 'service words', field !== undefined ? { field, received: 'x' } : {});
+  const reasonOf = (e: { details?: Record<string, unknown> }) => e.details?.reason;
+
+  it('reads a signup no longer a draft as that, for a merge and an undo', () => {
+    expect(reasonOf(mergeRefusal(refused('conflict', 'status'), 'fix'))).toBe('not_draft');
+    expect(reasonOf(mergeRefusal(refused('conflict', 'status'), 'undo'))).toBe('not_draft');
+  });
+
+  it('reads as stale only what a change since causes a merge to refuse', () => {
+    // A copy closed, booked or no longer a copy; values no longer the shared ones.
+    for (const field of ['slotIds', 'values']) {
+      expect(reasonOf(mergeRefusal(refused('conflict', field), 'fix'))).toBe('stale');
+    }
+    // A copy deleted since.
+    expect(reasonOf(mergeRefusal(refused('invalid_input', 'slotIds'), 'fix'))).toBe('stale');
+  });
+
+  it('never reads as stale what no change caused, which would offer the same button again', () => {
+    // The input itself, or values the fields refuse.
+    for (const field of ['keepSlotId', 'what', undefined]) {
+      expect(mergeRefusal(refused('invalid_input', field), 'fix')).toEqual({
+        code: 'invalid_input',
+        message: 'service words',
+      });
+    }
+    // A total too big for one slot.
+    expect(mergeRefusal(refused('conflict', 'capacity'), 'fix')).toEqual({
+      code: 'invalid_input',
+      message: 'service words',
+    });
+  });
+
+  it('reads an undo’s conflicts as changed, and passes the rest on without their field', () => {
+    for (const field of ['keepSlotId', 'capacity']) {
+      expect(reasonOf(mergeRefusal(refused('conflict', field), 'undo'))).toBe('changed');
+    }
+    // A value for a field deleted since, and that field could be called "label".
+    expect(mergeRefusal(refused('invalid_input', 'label'), 'undo')).toEqual({
+      code: 'invalid_input',
+      message: 'service words',
+    });
+    expect(mergeRefusal(refused('not_found'), 'undo')).toEqual({
+      code: 'not_found',
+      message: 'service words',
+    });
+  });
+
+  it('never passes a slot field’s ref on as the refusal’s field', () => {
+    for (const step of ['fix', 'undo'] as const) {
+      expect(mergeRefusal(refused('invalid_input', 'label'), step).field).toBeUndefined();
+    }
   });
 });
 
@@ -322,8 +380,9 @@ describe('buildUndo', () => {
 describe('buildUndo for a merge', () => {
   const unmerge: SlotUnmergeInput = {
     keepSlotId: 'a',
+    keptUpdatedAt: '2030-01-01T00:00:00.000Z',
     previous: { values: { what: 'Helper 1' }, capacity: 1 },
-    restored: [{ values: { what: 'Helper 2' }, capacity: 1, sortOrder: 1, status: 'open' }],
+    restored: [{ values: { what: 'Helper 2' }, capacity: 1, sortOrder: 1 }],
   };
   const before = state({
     fields: [what],
@@ -484,48 +543,37 @@ describe('planUndo', () => {
 describe('planUndo for a merge', () => {
   const unmerge: SlotUnmergeInput = {
     keepSlotId: 'a',
+    keptUpdatedAt: '2030-01-01T00:00:00.000Z',
     previous: { values: { what: 'Helper 1' }, capacity: 1 },
     restored: [
-      { values: { what: 'Helper 2' }, capacity: 1, sortOrder: 1, status: 'open' },
-      { values: { what: 'Helper 3' }, capacity: 2, sortOrder: 2, status: 'open' },
+      { values: { what: 'Helper 2' }, capacity: 1, sortOrder: 1 },
+      { values: { what: 'Helper 3' }, capacity: 2, sortOrder: 2 },
     ],
   };
   const undo: DraftFixUndo = { kind: 'duplicate_slots', unmerge };
-  const merged = (capacity: number | null) =>
-    state({ fields: [what], slots: [slot('a', { what: 'Helper' }, { capacity })] });
 
-  it('unmerges while the kept slot holds the merged total', () => {
-    expect(planUndo(undo, merged(4))).toEqual({ kind: 'duplicate_slots', unmerge });
-  });
-
-  it('can’t once the kept slot is gone or its places changed', () => {
-    expect(planUndo(undo, merged(5))).toBeNull();
-    expect(planUndo(undo, merged(null))).toBeNull();
-    expect(planUndo(undo, state({ fields: [what], slots: [] }))).toBeNull();
-  });
-
-  it('can’t twice when the kept slot had no limit, which its capacity can’t show', () => {
-    const unlimited: DraftFixUndo = {
-      kind: 'duplicate_slots',
-      unmerge: {
-        keepSlotId: 'a',
-        previous: { values: { what: 'Snacks' }, capacity: null },
-        restored: [{ values: { what: 'Snacks' }, capacity: 2, sortOrder: 1, status: 'open' }],
-      },
-    };
-    const once = state({
+  it('passes the undo on to the merge service while the kept slot is there', () => {
+    const merged = state({
       fields: [what],
-      slots: [slot('a', { what: 'Snacks' }, { capacity: null })],
+      slots: [slot('a', { what: 'Helper' }, { capacity: 4 })],
     });
-    expect(planUndo(unlimited, once)).toMatchObject({ kind: 'duplicate_slots' });
-    const twice = state({
+    expect(planUndo(undo, merged)).toEqual({ kind: 'duplicate_slots', unmerge });
+  });
+
+  it('leaves whether the kept slot changed to the service, which checks it under its lock', () => {
+    // A copy of it added since doesn't stop a first undo.
+    const copied = state({
       fields: [what],
       slots: [
-        slot('a', { what: 'Snacks' }, { capacity: null }),
-        slot('b', { what: 'Snacks' }, { capacity: 2, sortOrder: 1 }),
+        slot('a', { what: 'Helper' }, { capacity: 4 }),
+        slot('z', { what: 'Helper' }, { capacity: 4, sortOrder: 9 }),
       ],
     });
-    expect(planUndo(unlimited, twice)).toBeNull();
+    expect(planUndo(undo, copied)).toEqual({ kind: 'duplicate_slots', unmerge });
+  });
+
+  it('can’t once the kept slot is gone', () => {
+    expect(planUndo(undo, state({ fields: [what], slots: [] }))).toBeNull();
   });
 });
 

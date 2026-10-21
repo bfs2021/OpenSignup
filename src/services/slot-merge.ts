@@ -1,9 +1,9 @@
-import { and, desc, eq, inArray, sql, type Column } from 'drizzle-orm';
+import { and, eq, sql, type Column } from 'drizzle-orm';
 import type { Db, Tx } from '@/db/client';
-import { activity } from '@/db/schema/activity';
 import { commitments } from '@/db/schema/commitments';
 import { slots } from '@/db/schema/slots';
 import { activityActor, recordActivity } from '@/lib/activity';
+import { findDuplicateSlots } from '@/lib/draft-checks';
 import { serviceError, type ServiceError } from '@/lib/errors';
 import { parseInputSafe } from '@/lib/parse';
 import { requireWorkspaceWrite, type Actor } from '@/lib/policy';
@@ -43,6 +43,15 @@ function totalCapacity(capacities: readonly (number | null)[]): number | null {
     total += c;
   }
   return total;
+}
+
+/** Whether two slots' values say the same thing, whatever order their keys are in. */
+function sameValues(a: Record<string, unknown>, b: Record<string, unknown>): boolean {
+  const keys = Object.keys(a);
+  return (
+    keys.length === Object.keys(b).length &&
+    keys.every((k) => Object.hasOwn(b, k) && JSON.stringify(a[k]) === JSON.stringify(b[k]))
+  );
 }
 
 /**
@@ -171,6 +180,40 @@ export async function mergeSlots(
     const booked = await refuseCommitments(tx, workspaceId, slotIds, 'slotIds');
     if (!booked.ok) return booked;
 
+    // Still copies of each other, all of them and only them: the check the
+    // review page ran (`findDuplicateSlots`), run again on the rows and fields
+    // as locked, so a copy renamed or added since the page was drawn, or a set
+    // that was never copies, is refused and nothing is deleted. The values
+    // sent, for numbered rows, must be the ones the copies now share.
+    const fields = await listFieldsForSignup(tx, signupId);
+    const copies = findDuplicateSlots({
+      fields,
+      slots: current.map((s) => ({
+        id: s.id,
+        values: (s.values as Record<string, unknown>) ?? {},
+        capacity: s.capacity,
+        status: s.status,
+      })),
+      settings: { groupByFieldRefs: [] },
+    }).find((n) => n.slotIds.length === wanted.size && n.slotIds.every((id) => wanted.has(id)));
+    if (!copies) {
+      return err(
+        serviceError('conflict', 'these slots are no longer copies of each other', {
+          field: 'slotIds',
+          details: { reason: 'not_copies' },
+          suggestion: 'reload the signup: a slot may have been changed or added since',
+        }),
+      );
+    }
+    if (values !== undefined && !sameValues(values, copies.values)) {
+      return err(
+        serviceError('conflict', 'these are not the values the copies share now', {
+          field: 'values',
+          details: { reason: 'not_copies', expected: copies.values },
+        }),
+      );
+    }
+
     const capacity = totalCapacity(group.map((s) => s.capacity));
     if (capacity !== null && capacity > MAX_CAPACITY) {
       return err(
@@ -183,10 +226,10 @@ export async function mergeSlots(
 
     let slotAt: Date | null = null;
     if (values !== undefined) {
-      // Read under the signup lock, as `updateSlot` does: a field change or
-      // an anchor move has finished, so the values are checked against the
-      // fields as it left them and slot_at comes from the anchor as it stands.
-      const fields = await listFieldsForSignup(tx, signupId);
+      // The fields were read under the signup lock, as `updateSlot` reads
+      // them: a field change or an anchor move has finished, so the values are
+      // checked against the fields as it left them and slot_at comes from the
+      // anchor as it stands.
       const valid = validateSlotValues(fields, values);
       if (!valid.ok) return valid;
       slotAt = extractSlotAt(settings, fields, values);
@@ -227,13 +270,13 @@ export async function mergeSlots(
       slot,
       undo: {
         keepSlotId,
+        keptUpdatedAt: slot.updatedAt.toISOString(),
         previous: { values: kept.values as Record<string, unknown>, capacity: kept.capacity },
+        // Every slot merged was open: a closed one is refused above.
         restored: others.map((s) => ({
           values: s.values as Record<string, unknown>,
           capacity: s.capacity,
           sortOrder: s.sortOrder,
-          // Every slot merged was open: a closed one is refused above.
-          status: 'open' as const,
         })),
       },
     });
@@ -244,9 +287,12 @@ export async function mergeSlots(
  * Undo `mergeSlots`, in one transaction: the kept slot gets back its values
  * and capacity, and the deleted slots are added again at their old place in
  * the order (new ids, so a link to one of the old ids stays broken). Refused
- * with `conflict` when the kept slot is gone or its capacity is no longer the
- * merged total: it has been changed since, and putting the old numbers back
- * would undo that change too. Writes one `slot.unmerged` activity row.
+ * with `conflict` on `keepSlotId` when the kept slot is gone, or has changed
+ * since the merge wrote it: its `updatedAt` is no longer `keptUpdatedAt`.
+ * Editing a slot, reordering it and this undo all move `updatedAt`, so a
+ * rename, a new date, other places, a move, or an undo already made (its
+ * answer lost, say, or sent twice at once) are each refused rather than
+ * overwritten or made twice. Writes one `slot.unmerged` activity row.
  */
 export async function unmergeSlots(
   db: Db,
@@ -256,7 +302,7 @@ export async function unmergeSlots(
 ): Promise<Result<{ slot: SlotRow; restored: SlotRow[] }, ServiceError>> {
   const input = parseInputSafe(SlotUnmergeInputSchema, rawInput);
   if (!input.ok) return input;
-  const { keepSlotId, previous, restored } = input.value;
+  const { keepSlotId, keptUpdatedAt, previous, restored } = input.value;
 
   const found = await readLiveSignup(db, signupId);
   if (!found) return err(serviceError('not_found', 'signup not found'));
@@ -281,43 +327,19 @@ export async function unmergeSlots(
         ),
       );
     }
-    const merged = totalCapacity([previous.capacity, ...restored.map((r) => r.capacity)]);
-    if (kept.capacity !== merged) {
+    // Read under the signup lock, which every slot edit and reorder takes, so
+    // two undos at once take turns and the second sees the first's write.
+    if (kept.updatedAt.toISOString() !== keptUpdatedAt) {
       return err(
         serviceError(
           'conflict',
-          'the merged slot has been changed since, so the merge cannot be undone',
+          'the merged slot has changed since, so the merge cannot be undone',
           {
-            field: 'capacity',
-            received: kept.capacity,
-            expected: merged === null ? 'no limit' : String(merged),
+            field: 'keepSlotId',
+            received: kept.updatedAt.toISOString(),
+            expected: keptUpdatedAt,
           },
         ),
-      );
-    }
-    // Undone already: a kept slot with no limit has no limit before the merge
-    // and after its undo alike, so the capacity check above can't tell a
-    // second undo (its answer lost, say) from the first. The log can, as
-    // `reminder.sent` stops a second reminder: read under the signup lock, so
-    // two undos at once take turns and the second finds the first's row.
-    const [latest] = await tx
-      .select({ eventType: activity.eventType })
-      .from(activity)
-      .where(
-        and(
-          eq(activity.signupId, signupId),
-          inArray(activity.eventType, ['slot.merged', 'slot.unmerged']),
-          sql`${activity.payload} ->> 'slotId' = ${keepSlotId}`,
-        ),
-      )
-      .orderBy(desc(activity.occurredAt))
-      .limit(1);
-    if (latest?.eventType === 'slot.unmerged') {
-      return err(
-        serviceError('conflict', 'this merge has been undone already', {
-          field: 'keepSlotId',
-          received: keepSlotId,
-        }),
       );
     }
     const booked = await refuseCommitments(tx, workspaceId, [keepSlotId], 'keepSlotId');
@@ -337,7 +359,9 @@ export async function unmergeSlots(
         values: previous.values,
         capacity: previous.capacity,
         slotAt: extractSlotAt(settings, fields, previous.values),
-        updatedAt: new Date(),
+        // Never the merge's own instant, or a second undo would pass the check
+        // above: two writes can land in the same millisecond.
+        updatedAt: new Date(Math.max(Date.now(), Date.parse(keptUpdatedAt) + 1)),
       })
       .where(and(eq(slots.id, keepSlotId), inWorkspace(slots.workspaceId, workspaceId)))
       .returning();
@@ -353,7 +377,6 @@ export async function unmergeSlots(
           capacity: row.capacity,
           sortOrder: row.sortOrder,
           slotAt: extractSlotAt(settings, fields, row.values),
-          status: row.status,
         }),
       );
     }

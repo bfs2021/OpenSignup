@@ -13,7 +13,7 @@ import { commitToSlot } from '@/services/commitments';
 import { createSignup, deleteSignup, publishSignup } from '@/services/signups';
 import { deleteField, listFieldsForSignup } from '@/services/slot-fields';
 import { mergeSlots, unmergeSlots } from '@/services/slot-merge';
-import { deleteSlot, listSlotsForSignup, updateSlot } from '@/services/slots';
+import { deleteSlot, listSlotsForSignup, reorderSlots, updateSlot } from '@/services/slots';
 import { settle, untilServiceBlockedOn } from '@/services/testing/locks';
 
 interface Fixture {
@@ -175,20 +175,12 @@ describe('mergeSlots (db)', () => {
     // order they were shown.
     expect(r.value.undo).toEqual({
       keepSlotId: h1,
+      // The version an undo checks the kept slot against.
+      keptUpdatedAt: r.value.slot.updatedAt.toISOString(),
       previous: { values: { role: 'Helper', day: '2026-05-10' }, capacity: 2 },
       restored: [
-        {
-          values: { role: 'Helper', day: '2026-05-10' },
-          capacity: 3,
-          sortOrder: 3,
-          status: 'open',
-        },
-        {
-          values: { role: 'Helper', day: '2026-05-10' },
-          capacity: 1,
-          sortOrder: 4,
-          status: 'open',
-        },
+        { values: { role: 'Helper', day: '2026-05-10' }, capacity: 3, sortOrder: 3 },
+        { values: { role: 'Helper', day: '2026-05-10' }, capacity: 1, sortOrder: 4 },
       ],
     });
 
@@ -222,27 +214,24 @@ describe('mergeSlots (db)', () => {
     expect(merged[0]?.payload).toMatchObject({ capacity: null });
   });
 
-  it('writes the values sent, and the slot_at they resolve to', async () => {
+  it('writes the values numbered rows share, without the number', async () => {
     const { signupId, ids } = await makeDraft(fx, 'Merge numbered', [
       { role: 'Helper 1', day: '2026-05-10', capacity: 1 },
       { role: 'Helper 2', day: '2026-05-10', capacity: 1 },
     ]);
-    const before = await listSlotsForSignup(fx.db, signupId);
-    expect(before[0]?.slotAt?.toISOString()).toBe('2026-05-10T12:00:00.000Z');
-
     const r = await mergeSlots(fx.db, fx.actor, signupId, {
       keepSlotId: ids[0],
       slotIds: ids,
-      values: { role: 'Helper', day: '2026-05-11' },
+      values: { day: '2026-05-10', role: 'Helper' },
     });
     expect(r.ok, JSON.stringify(r)).toBe(true);
     expect(await shown(fx, signupId)).toEqual([
       {
-        values: { role: 'Helper', day: '2026-05-11' },
+        values: { day: '2026-05-10', role: 'Helper' },
         capacity: 2,
         sortOrder: 0,
         status: 'open',
-        slotAt: '2026-05-11T12:00:00.000Z',
+        slotAt: '2026-05-10T12:00:00.000Z',
       },
     ]);
   });
@@ -260,18 +249,71 @@ describe('mergeSlots (db)', () => {
     expect(after[0]?.slotAt?.toISOString()).toBe('2026-05-10T12:00:00.000Z');
   });
 
-  it('refuses values that do not fit the fields, and changes nothing', async () => {
-    const { signupId, ids } = await makeDraft(fx, 'Merge bad values', [helpers[1]!, helpers[1]!]);
+  it('refuses values other than the ones the copies share, and changes nothing', async () => {
+    const { signupId, ids } = await makeDraft(fx, 'Merge other values', [
+      { role: 'Helper 1', day: '2026-05-10', capacity: 1 },
+      { role: 'Helper 2', day: '2026-05-10', capacity: 1 },
+    ]);
     const before = await shown(fx, signupId);
-    for (const values of [{ shift: 'Morning' }, { day: 'next Tuesday' }]) {
+    for (const values of [
+      { role: 'Helper', day: '2026-05-11' },
+      { role: 'Helper 1', day: '2026-05-10' },
+      { shift: 'Morning' },
+      { day: 'next Tuesday' },
+    ]) {
       const r = await mergeSlots(fx.db, fx.actor, signupId, {
         keepSlotId: ids[0],
         slotIds: ids,
         values,
       });
       expect(r.ok).toBe(false);
-      if (!r.ok) expect(r.error.code).toBe('invalid_input');
+      if (!r.ok) {
+        expect(r.error).toMatchObject({
+          code: 'conflict',
+          field: 'values',
+          details: { expected: { role: 'Helper', day: '2026-05-10' } },
+        });
+      }
     }
+    expect(await shown(fx, signupId)).toEqual(before);
+    expect(await events(fx, signupId, 'slot.merged')).toHaveLength(0);
+  });
+
+  it('refuses slots that are not every copy, or not copies, and deletes nothing', async () => {
+    const { signupId, ids } = await makeDraft(fx, 'Merge not copies', helpers);
+    for (const slotIds of [
+      [ids[1]!, ids[3]!],
+      [ids[0]!, ids[2]!],
+      [ids[0]!, ids[1]!, ids[3]!, ids[4]!],
+    ]) {
+      const r = await mergeSlots(fx.db, fx.actor, signupId, { keepSlotId: slotIds[0], slotIds });
+      expect(r.ok, JSON.stringify(slotIds)).toBe(false);
+      if (!r.ok) {
+        expect(r.error).toMatchObject({
+          code: 'conflict',
+          field: 'slotIds',
+          details: { reason: 'not_copies' },
+        });
+      }
+    }
+    expect(await listSlotsForSignup(fx.db, signupId)).toHaveLength(helpers.length);
+    expect(await events(fx, signupId, 'slot.merged')).toHaveLength(0);
+  });
+
+  it('refuses copies one of which was changed after the page found them', async () => {
+    const { signupId, ids } = await makeDraft(fx, 'Merge renamed', helpers);
+    const renamed = await updateSlot(fx.db, fx.actor, ids[4]!, {
+      values: { role: 'Helper', day: '2026-05-11' },
+    });
+    expect(renamed.ok, JSON.stringify(renamed)).toBe(true);
+    const before = await shown(fx, signupId);
+
+    const r = await mergeSlots(fx.db, fx.actor, signupId, {
+      keepSlotId: ids[1],
+      slotIds: [ids[1], ids[3], ids[4]],
+    });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toMatchObject({ code: 'conflict', field: 'slotIds' });
     expect(await shown(fx, signupId)).toEqual(before);
     expect(await events(fx, signupId, 'slot.merged')).toHaveLength(0);
   });
@@ -284,7 +326,7 @@ describe('mergeSlots (db)', () => {
 
     const r = await mergeSlots(fx.db, fx.actor, signupId, {
       keepSlotId: ids[1],
-      slotIds: [ids[1], ids[3]],
+      slotIds: [ids[1], ids[3], ids[4]],
     });
     expect(r.ok).toBe(false);
     if (!r.ok) {
@@ -435,7 +477,7 @@ describe('mergeSlots (db)', () => {
     expect(await events(fx, signupId, 'slot.merged')).toHaveLength(1);
   });
 
-  it('overlapping merges at once keep every place, whichever goes first', async () => {
+  it('two merges of the same copies at once, keeping different slots, merge once', async () => {
     const { signupId, ids } = await makeDraft(fx, 'Merge overlap', [
       { role: 'Helper', capacity: 1 },
       { role: 'Helper', capacity: 2 },
@@ -443,26 +485,14 @@ describe('mergeSlots (db)', () => {
     ]);
     const [a, b, c] = ids as [string, string, string];
     const results = await Promise.all([
-      mergeSlots(fx.db, fx.actor, signupId, { keepSlotId: a, slotIds: [a, b] }),
-      mergeSlots(fx.db, fx.actor, signupId, { keepSlotId: b, slotIds: [b, c] }),
+      mergeSlots(fx.db, fx.actor, signupId, { keepSlotId: a, slotIds: [a, b, c] }),
+      mergeSlots(fx.db, fx.actor, signupId, { keepSlotId: b, slotIds: [a, b, c] }),
     ]);
-    const [first, second] = results;
-    // a-then-b: b is gone by the time the second runs, and it is refused.
-    // b-then-a: b took c's places, and a then takes b's, all of them.
-    expect(first.ok, JSON.stringify(first)).toBe(true);
+    expect(results.filter((r) => r.ok)).toHaveLength(1);
     const after = await listSlotsForSignup(fx.db, signupId);
-    expect(after.reduce((sum, s) => sum + (s.capacity ?? 0), 0)).toBe(7);
-    if (second.ok) {
-      expect(after.map((s) => [s.id, s.capacity])).toEqual([[a, 7]]);
-    } else {
-      expect(second.error).toMatchObject({ code: 'invalid_input', details: { unknown: [b] } });
-      expect(after.map((s) => [s.id, s.capacity])).toEqual([
-        [a, 3],
-        [c, 4],
-      ]);
-    }
-    const merged = await events(fx, signupId, 'slot.merged');
-    expect(merged).toHaveLength(results.filter((r) => r.ok).length);
+    expect(after).toHaveLength(1);
+    expect(after[0]?.capacity).toBe(7);
+    expect(await events(fx, signupId, 'slot.merged')).toHaveLength(1);
   });
 });
 
@@ -528,7 +558,7 @@ describe('unmergeSlots (db)', () => {
       ],
       0,
       [0, 2],
-      { role: 'Helper', day: '2026-05-12' },
+      { role: 'Helper', day: '2026-05-10' },
     );
     expect(await shown(fx, signupId)).not.toEqual(before);
     const r = await unmergeSlots(fx.db, fx.actor, signupId, merge.undo);
@@ -552,7 +582,7 @@ describe('unmergeSlots (db)', () => {
   });
 
   it("refuses when the merged slot's capacity has changed since, and changes nothing", async () => {
-    const { signupId, ids, merge } = await merged('Unmerge changed', helpers, 1, [1, 3]);
+    const { signupId, ids, merge } = await merged('Unmerge changed', helpers, 1, [1, 3, 4]);
     const edit = await updateSlot(fx.db, fx.actor, ids[1]!, { capacity: 10 });
     expect(edit.ok, JSON.stringify(edit)).toBe(true);
     const before = await shown(fx, signupId);
@@ -562,9 +592,8 @@ describe('unmergeSlots (db)', () => {
     if (!r.ok) {
       expect(r.error).toMatchObject({
         code: 'conflict',
-        field: 'capacity',
-        received: 10,
-        expected: '5',
+        field: 'keepSlotId',
+        expected: merge.undo.keptUpdatedAt,
       });
     }
     expect(await shown(fx, signupId)).toEqual(before);
@@ -572,25 +601,25 @@ describe('unmergeSlots (db)', () => {
   });
 
   it('refuses when the merged slot has been deleted since', async () => {
-    const { signupId, ids, merge } = await merged('Unmerge gone', helpers, 1, [1, 3]);
+    const { signupId, ids, merge } = await merged('Unmerge gone', helpers, 1, [1, 3, 4]);
     expect((await deleteSlot(fx.db, fx.actor, ids[1]!)).ok).toBe(true);
     const r = await unmergeSlots(fx.db, fx.actor, signupId, merge.undo);
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.error).toMatchObject({ code: 'conflict', field: 'keepSlotId' });
-    expect(await listSlotsForSignup(fx.db, signupId)).toHaveLength(helpers.length - 2);
+    expect(await listSlotsForSignup(fx.db, signupId)).toHaveLength(helpers.length - 3);
   });
 
   it('refuses once the signup is published', async () => {
-    const { signupId, merge } = await merged('Unmerge published', helpers, 1, [1, 3]);
+    const { signupId, merge } = await merged('Unmerge published', helpers, 1, [1, 3, 4]);
     expect((await publishSignup(fx.db, fx.actor, signupId)).ok).toBe(true);
     const r = await unmergeSlots(fx.db, fx.actor, signupId, merge.undo);
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.error).toMatchObject({ code: 'conflict', field: 'status' });
-    expect(await listSlotsForSignup(fx.db, signupId)).toHaveLength(helpers.length - 1);
+    expect(await listSlotsForSignup(fx.db, signupId)).toHaveLength(helpers.length - 2);
   });
 
   it('refuses a value for a field deleted since, and changes nothing', async () => {
-    const { signupId, merge } = await merged('Unmerge field gone', helpers, 1, [1, 3]);
+    const { signupId, merge } = await merged('Unmerge field gone', helpers, 1, [1, 3, 4]);
     const fields = await listFieldsForSignup(fx.db, signupId);
     const day = fields.find((f) => f.ref === 'day')!;
     expect((await deleteField(fx.db, fx.actor, day.id)).ok).toBe(true);
@@ -603,7 +632,7 @@ describe('unmergeSlots (db)', () => {
   });
 
   it('refuses a viewer', async () => {
-    const { signupId, merge } = await merged('Unmerge viewer', helpers, 1, [1, 3]);
+    const { signupId, merge } = await merged('Unmerge viewer', helpers, 1, [1, 3, 4]);
     const viewer: Actor = {
       ...fx.actor,
       id: makeId('org'),
@@ -612,7 +641,7 @@ describe('unmergeSlots (db)', () => {
     await expect(unmergeSlots(fx.db, viewer, signupId, merge.undo)).rejects.toMatchObject({
       serviceError: { code: 'forbidden' },
     });
-    expect(await listSlotsForSignup(fx.db, signupId)).toHaveLength(helpers.length - 1);
+    expect(await listSlotsForSignup(fx.db, signupId)).toHaveLength(helpers.length - 2);
   });
 
   it('the same undo sent twice at once puts the slots back once', async () => {
@@ -625,14 +654,43 @@ describe('unmergeSlots (db)', () => {
     const refused = results.find((r) => !r.ok);
     expect(refused && !refused.ok && refused.error).toMatchObject({
       code: 'conflict',
-      field: 'capacity',
+      field: 'keepSlotId',
     });
     expect(await shown(fx, signupId)).toEqual(before);
     expect(await events(fx, signupId, 'slot.unmerged')).toHaveLength(1);
   });
 
+  it('refuses once the merged slot’s values have changed, its places untouched', async () => {
+    const { signupId, ids, merge } = await merged('Unmerge renamed', helpers, 1, [1, 3, 4]);
+    const edit = await updateSlot(fx.db, fx.actor, ids[1]!, {
+      values: { role: 'Helpers', day: '2026-05-11' },
+    });
+    expect(edit.ok, JSON.stringify(edit)).toBe(true);
+    const before = await shown(fx, signupId);
+    expect(before.find((s) => s.sortOrder === 1)).toMatchObject({ capacity: 6 });
+
+    const r = await unmergeSlots(fx.db, fx.actor, signupId, merge.undo);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toMatchObject({ code: 'conflict', field: 'keepSlotId' });
+    expect(await shown(fx, signupId)).toEqual(before);
+    expect(await events(fx, signupId, 'slot.unmerged')).toHaveLength(0);
+  });
+
+  it('refuses once the merged slot has been moved', async () => {
+    const { signupId, ids, merge } = await merged('Unmerge moved', helpers, 1, [1, 3, 4]);
+    const [setup, h1, cleanup] = ids as [string, string, string];
+    const moved = await reorderSlots(fx.db, fx.actor, signupId, { slotIds: [h1, setup, cleanup] });
+    expect(moved.ok, JSON.stringify(moved)).toBe(true);
+    const before = await shown(fx, signupId);
+
+    const r = await unmergeSlots(fx.db, fx.actor, signupId, merge.undo);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toMatchObject({ code: 'conflict', field: 'keepSlotId' });
+    expect(await shown(fx, signupId)).toEqual(before);
+  });
+
   // With no limit, the kept slot reads the same before the merge and after its
-  // undo, so only the log can tell a second undo from the first.
+  // undo, so only its version (`updatedAt`) tells a second undo from the first.
   const unlimited: Row[] = [
     { role: 'Helper', capacity: null },
     { role: 'Helper', capacity: null },
