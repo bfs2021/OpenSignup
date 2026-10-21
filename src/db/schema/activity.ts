@@ -43,6 +43,7 @@ export const ACTIVITY_EVENTS = [
   'signup.viewed',
   'signup.publish_refused',
   'signup.link_copied',
+  'signup.link_shared',
   'magic_compose.failed',
   'review.notice_shown',
   'slot.created',

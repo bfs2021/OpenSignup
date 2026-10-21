@@ -32,7 +32,10 @@ test.describe('organizer flow', () => {
     expect(created.ok()).toBe(true);
     const draftId = (await created.json()).data.id as string;
 
-    await page.goto(`/app/signups/${draftId}/build`);
+    // A draft has no link worth sending yet: the share step sends it back to
+    // the signup's own address, which opens an empty draft in the builder.
+    await page.goto(`/app/signups/${draftId}/share`);
+    await page.waitForURL(new RegExp(`/app/signups/${draftId}/build$`));
     // Desktop header shows Publish directly; mobile tucks it behind the
     // "More actions" sheet.
     const desktopPublish = page.getByRole('button', { name: 'Publish', exact: true });
@@ -42,7 +45,13 @@ test.describe('organizer flow', () => {
       await page.getByRole('button', { name: 'More actions' }).click();
       await page.getByRole('button', { name: 'Publish signup' }).click();
     }
-    await expect(page.getByText('Signup published')).toBeVisible();
+    await page.waitForURL(new RegExp(`/app/signups/${draftId}/share$`));
+    await expect(
+      page.getByRole('heading', { name: "It's live. Now send the link." }),
+    ).toBeVisible();
+    await expect(page.getByRole('link', { name: 'Download QR code' })).toBeVisible();
+    await page.getByRole('link', { name: 'Done, go to my signup' }).click();
+    await page.waitForURL(new RegExp(`/app/signups/${draftId}/build$`));
   });
 
   test('the slot editor takes no date before 1900', async ({ page }) => {

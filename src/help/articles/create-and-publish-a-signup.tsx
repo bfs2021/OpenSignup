@@ -154,7 +154,8 @@ export function CreateAndPublishASignup() {
           <Step>
             <p>
               To add or change slots, choose <Ui>{UI.editInBuilder}</Ui>. When everything looks
-              right, choose <Ui>{UI.publishFromReview}</Ui> to publish it.
+              right, choose <Ui>{UI.publishFromReview}</Ui> to publish it. Then send the link, as
+              shown below.
             </p>
           </Step>
         </Steps>
@@ -177,26 +178,41 @@ export function CreateAndPublishASignup() {
               <Ui>{UI.publishOnPhone}</Ui>.
             </p>
             <p>
-              You&apos;ll see <Ui>{UI.published}</Ui>.
+              You&apos;ll see <Ui>{UI.shareHeading}</Ui>
             </p>
           </Step>
           <Step>
             <p>
-              Next to <Ui>{UI.publicLink}</Ui>, choose the copy button. Send the link to people by
-              email or in a group chat.
+              Choose <Ui>{UI.copyLink}</Ui>. Send the link to people by email or in a group chat. On
+              a phone, you can choose <Ui>{UI.share}</Ui> instead, to send it from another app.
             </p>
+          </Step>
+          <Step>
             <p>
-              The link is there before you publish too. Until you publish, it only says the signup
-              isn&apos;t ready.
+              Choose <Ui>{UI.doneSharing}</Ui> to go back to your signup.
             </p>
-            <Screenshot
-              src="/help/create-and-publish-a-signup/published.png"
-              alt="The top of a published signup, marked open, with the public link and its copy button."
-              width={480}
-              height={110}
-            />
           </Step>
         </Steps>
+        <p>
+          The box under <Ui>{UI.messageBox}</Ui> holds your signup&apos;s name and the link. Change
+          the words if you like. Then choose <Ui>{UI.copyMessage}</Ui>, and paste it where you want
+          to send it.
+        </p>
+        <p>
+          For a flyer or a newsletter, choose <Ui>{UI.downloadQr}</Ui>. It saves a picture of a
+          code. Pointing a phone&apos;s camera at it opens your signup.
+        </p>
+        <p>
+          You can copy the link again at any time. At the top of your signup, next to{' '}
+          <Ui>{UI.publicLink}</Ui>, choose the copy button. The link is there before you publish
+          too. Until you publish, it only says the signup isn&apos;t ready.
+        </p>
+        <Screenshot
+          src="/help/create-and-publish-a-signup/published.png"
+          alt="The top of a published signup, marked open, with the public link and its copy button."
+          width={480}
+          height={110}
+        />
       </section>
 
       <section className="space-y-4">

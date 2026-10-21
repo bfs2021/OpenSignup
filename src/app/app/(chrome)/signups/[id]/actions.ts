@@ -18,12 +18,17 @@ async function requireActor() {
   return toActor(await requireOrganizerSession());
 }
 
+/**
+ * Publish, from the header, the phone's More actions sheet and the review
+ * page alike. Once it worked, the organizer lands on the share step ("It's
+ * live. Now send the link."); a refusal stays on the page it came from.
+ */
 export async function publishAction(signupId: string) {
   const actor = await requireActor();
   const result = await publishSignup(getDb(), actor, signupId);
   revalidateSignup(signupId);
   if (result.ok) {
-    redirect(`/app/signups/${signupId}/build?published=1`);
+    redirect(`/app/signups/${signupId}/share`);
   }
 }
 

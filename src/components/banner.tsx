@@ -1,12 +1,11 @@
 import Link from 'next/link';
 
-type Kind = 'preview' | 'closed' | 'aiDraft' | 'published';
+type Kind = 'preview' | 'closed' | 'aiDraft';
 
 const STYLES: Record<Kind, string> = {
   preview: 'bg-brand/10 text-brand',
   closed: 'bg-surface-sunk text-ink-muted',
   aiDraft: 'bg-brand/10 text-brand',
-  published: 'bg-success/10 text-success',
 };
 
 export interface BannerAction {

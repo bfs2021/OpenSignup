@@ -37,10 +37,19 @@ export const UI = {
   // Phones: the three-dot button's accessible name, then the item it opens.
   moreActions: 'More actions',
   publishOnPhone: 'Publish signup',
+  // Publishing, from any of the three buttons above, lands on this page.
+  shareHeading: "It's live. Now send the link.",
+  copyLink: 'Copy link',
+  // Only where the browser has a share sheet, as most phones do.
+  share: 'Share…',
+  messageBox: 'A message to send with it',
+  copyMessage: 'Copy message and link',
+  downloadQr: 'Download QR code',
+  doneSharing: 'Done, go to my signup',
+  // The link at the top of every tab, for copying it again later.
   publicLink: 'Public link',
   // An icon-only button: the article says "the copy button"; the test uses this.
   copyPublicLink: 'Copy public link',
-  published: 'Signup published',
   // On the signup page people open: each slot's button starts with this.
   signUp: 'Sign up',
   // The button reads "Fields (2)"; the count changes, so the test matches the start.

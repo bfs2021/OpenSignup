@@ -151,8 +151,36 @@ test.describe('help: create and publish your first signup', () => {
     await preview.close();
 
     await page.getByRole('button', { name: UI.publish, exact: true }).click();
-    await expect(page.getByText(UI.published)).toBeVisible();
+    await page.waitForURL(/\/share$/);
+    await expect(page.getByRole('heading', { name: UI.shareHeading })).toBeVisible();
 
+    await page.getByRole('button', { name: UI.copyLink }).click();
+    const clipboard = () => page.evaluate(() => navigator.clipboard.readText());
+    await expect.poll(clipboard).toMatch(/\/s\/snack-duty-spring-season/);
+    const copied = await clipboard();
+    const slug = new URL(copied).pathname.split('/').pop();
+
+    // The message holds the signup's name and the link, and copies with the
+    // organizer's changes; the link goes back in if they took it out.
+    const message = page.getByLabel(UI.messageBox);
+    await expect(message).toHaveValue(`Snack duty — Spring season\nSign up here: ${copied}`);
+    await message.fill('Snacks for the spring games, two families a game.');
+    await page.getByRole('button', { name: UI.copyMessage }).click();
+    await expect
+      .poll(clipboard)
+      .toBe(`Snacks for the spring games, two families a game.\n${copied}`);
+
+    // The QR code is drawn in the browser and saved as a picture.
+    const [qr] = await Promise.all([
+      page.waitForEvent('download'),
+      page.getByRole('link', { name: UI.downloadQr }).click(),
+    ]);
+    expect(qr.suggestedFilename()).toBe(`${slug}-qr.png`);
+
+    await page.getByRole('link', { name: UI.doneSharing }).click();
+    await page.waitForURL(/\/build$/);
+
+    // "You can copy the link again at any time."
     const header = page
       .locator('header', { has: page.getByText(UI.publicLink, { exact: true }) })
       .locator('visible=true');
@@ -193,8 +221,7 @@ test.describe('help: create and publish your first signup', () => {
       });
     }
     await header.getByRole('button', { name: UI.copyPublicLink }).click();
-    const copied = await page.evaluate(() => navigator.clipboard.readText());
-    expect(copied).toMatch(/\/s\/snack-duty-spring-season/);
+    await expect.poll(clipboard).toBe(copied);
 
     // What happens next: the link opens a page people can sign up on.
     await page.goto(copied);
@@ -271,6 +298,18 @@ test.describe('help: create and publish your first signup', () => {
 
     test('publish is under the three dots, and there is no preview', async ({ page, context }) => {
       await loginAsSeededOrganizer(context);
+      // Most phones have a share sheet; the test browser may not, so it gets
+      // one that notes what it was handed.
+      await page.addInitScript(() => {
+        const shared: ShareData[] = [];
+        Object.defineProperty(window, '__shared', { value: shared });
+        Object.defineProperty(navigator, 'share', {
+          configurable: true,
+          value: async (data: ShareData) => {
+            shared.push(data);
+          },
+        });
+      });
       const created = await page.request.post('/api/signups', {
         data: {
           title: `Phone publish ${Date.now()}`,
@@ -287,7 +326,15 @@ test.describe('help: create and publish your first signup', () => {
       await expect(page.getByRole('link', { name: UI.preview })).toBeHidden();
       await page.getByRole('button', { name: UI.moreActions }).click();
       await page.getByRole('button', { name: UI.publishOnPhone }).click();
-      await expect(page.getByText(UI.published)).toBeVisible();
+      await expect(page.getByRole('heading', { name: UI.shareHeading })).toBeVisible();
+      await expect(page.getByRole('button', { name: UI.copyLink })).toBeVisible();
+      await page.getByRole('button', { name: UI.share }).click();
+      await expect
+        .poll(() => page.evaluate(() => (window as unknown as { __shared: ShareData[] }).__shared))
+        .toEqual([
+          { title: expect.stringMatching(/^Phone publish/), url: expect.stringMatching(/\/s\//) },
+        ]);
+      await page.getByRole('link', { name: UI.doneSharing }).click();
       await expect(
         page.getByText(UI.publicLink, { exact: true }).locator('visible=true'),
       ).toBeVisible();

@@ -6,7 +6,6 @@ import { publicSignupUrl } from '@/lib/links';
 import { SignupHeader } from '@/components/signup/SignupHeader';
 import { TabsNav } from '@/components/signup/TabsNav';
 import { AiDraftBanner } from '@/components/magic-compose/AiDraftBanner';
-import { PublishedBanner } from '@/components/signup/PublishedBanner';
 import { SignupLoadError } from '@/components/signup/SignupLoadError';
 import type { SignupStatus } from '@/schemas/signups';
 import { closeAction, publishAction } from '../actions';
@@ -40,7 +39,6 @@ export default async function SignupDetailLayout({ children, params }: LayoutPro
         publishAction={publishAction.bind(null, id)}
         closeAction={closeAction.bind(null, id)}
       />
-      <PublishedBanner signupStatus={sig.status} />
       <AiDraftBanner
         signupId={id}
         signupStatus={sig.status}

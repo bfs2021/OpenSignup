@@ -9,7 +9,7 @@ import { workspaces } from '@/db/schema/workspaces';
 import { makeId } from '@/lib/ids';
 import type { Actor } from '@/lib/policy';
 import { createSignup } from '@/services/signups';
-import { deleteSignupAction, setRequireEmailAction } from './actions';
+import { deleteSignupAction, publishAction, setRequireEmailAction } from './actions';
 
 // The action reads the organizer from the session cookie. Tests hand it one
 // directly instead of going through Auth.js.
@@ -177,5 +177,61 @@ describe('deleteSignupAction (db)', () => {
       `/app/signups/sig_nope/settings?error=${encodeURIComponent('No longer available.')}`,
     );
     expect(url).not.toMatch(/signup%20not%20found/);
+  });
+});
+
+// Publish, from the header, the phone's sheet and the review page.
+describe('publishAction (db)', () => {
+  const db = getDb();
+  const organizerId = makeId('org');
+  const workspaceId = makeId('ws');
+  const slug = `pub-${workspaceId.slice(-8).toLowerCase()}`;
+  const owner: Actor = {
+    kind: 'organizer',
+    id: organizerId,
+    email: `${slug}@example.test`,
+    workspaceIds: [workspaceId],
+    workspaceRoles: { [workspaceId]: 'owner' },
+  };
+
+  beforeAll(async () => {
+    await db.transaction(async (tx) => {
+      await tx.insert(organizers).values({ id: organizerId, email: owner.email });
+      await tx.insert(workspaces).values({
+        id: workspaceId,
+        slug,
+        name: 'Publish Test',
+        type: 'personal',
+        plan: 'free',
+      });
+    });
+  });
+
+  afterAll(async () => {
+    await db.delete(workspaces).where(eq(workspaces.id, workspaceId));
+    await db.delete(organizers).where(eq(organizers.id, organizerId));
+  });
+
+  it('lands on the share step once the signup is open', async () => {
+    session.actor = owner;
+    const created = await createSignup(db, owner, workspaceId, {
+      title: 'Snack duty',
+      description: '',
+      tags: [],
+      visibility: 'unlisted',
+      settings: {},
+    });
+    if (!created.ok) throw new Error(created.error.message);
+    const id = created.value.id;
+
+    expect(await redirectOf(() => publishAction(id))).toBe(`/app/signups/${id}/share`);
+    const [row] = await db
+      .select({ status: signups.status })
+      .from(signups)
+      .where(eq(signups.id, id));
+    expect(row?.status).toBe('open');
+
+    // A second click finds it open already: refused, so it stays where it was.
+    await expect(publishAction(id)).resolves.toBeUndefined();
   });
 });

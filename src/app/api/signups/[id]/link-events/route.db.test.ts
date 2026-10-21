@@ -38,7 +38,7 @@ describe('POST /api/signups/[id]/link-events (db)', () => {
   };
   let signupId: string;
 
-  const rows = (eventType: 'signup.link_copied') =>
+  const rows = (eventType: 'signup.link_copied' | 'signup.link_shared') =>
     db
       .select({ actorId: activity.actorId, payload: activity.payload })
       .from(activity)
@@ -91,6 +91,27 @@ describe('POST /api/signups/[id]/link-events (db)', () => {
     ]);
   });
 
+  it('records a share from the share step as signup.link_shared, not as a copy', async () => {
+    expect((await beacon(signupId, 'event=shared&surface=share_step')).status).toBe(200);
+    expect(await rows('signup.link_shared')).toEqual([
+      { actorId: organizerId, payload: { surface: 'share_step', status: 'draft' } },
+    ]);
+    expect(await rows('signup.link_copied')).toEqual([]);
+  });
+
+  it('records a copy from the share step and from its message, each by its surface', async () => {
+    expect((await beacon(signupId, 'event=copied&surface=share_step')).status).toBe(200);
+    expect((await beacon(signupId, 'event=copied&surface=share_message')).status).toBe(200);
+    const written = (await rows('signup.link_copied')).map((r) => r.payload);
+    expect(written).toHaveLength(2);
+    expect(written).toEqual(
+      expect.arrayContaining([
+        { surface: 'share_step', status: 'draft' },
+        { surface: 'share_message', status: 'draft' },
+      ]),
+    );
+  });
+
   it('stops counting past 60 copies an hour from one organizer', async () => {
     const otherOrganizer = makeId('org');
     session.actor = { ...owner, id: otherOrganizer };
@@ -129,10 +150,11 @@ describe('POST /api/signups/[id]/link-events (db)', () => {
 
   it('refuses an event or surface it doesn’t know', async () => {
     expect((await beacon(signupId, 'event=opened&surface=header')).status).toBe(400);
-    expect((await beacon(signupId, 'event=shared&surface=header')).status).toBe(400);
     expect((await beacon(signupId, 'event=copied&surface=elsewhere')).status).toBe(400);
+    expect((await beacon(signupId, 'event=shared&surface=elsewhere')).status).toBe(400);
     expect((await beacon(signupId, 'event=copied')).status).toBe(400);
     expect(await rows('signup.link_copied')).toEqual([]);
+    expect(await rows('signup.link_shared')).toEqual([]);
   });
 
   it('answers 404 for a deleted signup', async () => {
