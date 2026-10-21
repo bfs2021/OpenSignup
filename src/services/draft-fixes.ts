@@ -7,7 +7,7 @@ import {
   findDayFor,
   findNoticeFor,
   labelProblem,
-  mergeRefusal,
+  draftSlotsRefusal,
   mergeRequestFor,
   planUndo,
   removeDayUndo,
@@ -31,7 +31,7 @@ import type { SlotUnmergeInput } from '@/schemas/slots';
 import { getSignupForOrganizer, updateSignup } from './signups';
 import { addField, deleteField, updateField } from './slot-fields';
 import { mergeSlots, unmergeSlots } from './slot-merge';
-import { addSlotsBulk, deleteSlot, updateSlot } from './slots';
+import { addSlotsBulk, deleteDraftSlots, updateSlot } from './slots';
 
 /**
  * The review page's one-tap fixes (issue #503), its Remove day (issue #504),
@@ -165,8 +165,9 @@ async function fix(
       return r.ok ? ok({ notice }) : r;
     }
     case 'blank_slot': {
-      const r = await removeSlots(db, actor, notice.slotIds);
-      return r.ok ? ok({ notice: { ...notice, slotIds: r.value } }) : r;
+      // All or nothing, in one transaction, while the signup is a draft.
+      const r = await deleteDraftSlots(db, actor, signupId, { slotIds: notice.slotIds });
+      return r.ok ? ok({ notice }) : err(draftSlotsRefusal(r.error, 'fix'));
     }
     case 'unnamed_field': {
       const r = await updateField(db, actor, notice.fieldId, { label });
@@ -182,56 +183,29 @@ async function fix(
       // All or nothing, in one transaction, the total worked out from the
       // rows as locked.
       const r = await mergeSlots(db, actor, signupId, mergeRequestFor(notice));
-      if (!r.ok) return err(mergeRefusal(r.error, 'fix'));
+      if (!r.ok) return err(draftSlotsRefusal(r.error, 'fix'));
       return ok({ notice: { ...notice, capacity: r.value.slot.capacity }, unmerge: r.value.undo });
     }
   }
 }
 
 /**
- * Deletes slots one at a time, each in its own transaction, as the builder
- * deletes them, and never one someone has signed up for. A slot gone already
- * is what was wanted. Anything else stops it, and Undo covers the slots that
- * did go. Returns those, or, when none went, why: every one gone already
- * (another tab got there first) is `conflict` with `details.reason: 'stale'`.
- */
-async function removeSlots(
-  db: Db,
-  actor: Actor,
-  slotIds: readonly string[],
-): Promise<Result<string[], ServiceError>> {
-  const removed: string[] = [];
-  let refused: ServiceError | null = null;
-  for (const id of slotIds) {
-    const r = await deleteSlot(db, actor, id, { force: false });
-    if (r.ok) {
-      removed.push(id);
-    } else {
-      refused = r.error;
-      if (r.error.code !== 'not_found') break;
-    }
-  }
-  if (removed.length === 0) {
-    return err(
-      refused && refused.code !== 'not_found' ? refused : conflict('stale', 'no slot to remove'),
-    );
-  }
-  return ok(removed);
-}
-
-/**
  * Remove day on a draft's review page (issue #504): deletes every slot of the
  * day `rawInput` names, one group of the slot list on a page grouped by a
- * date field. The day is found again on the signup as it is now and must be
- * one the page offers with exactly the slots the request names
- * (`findDayFor`); otherwise nothing changes and the answer is `conflict` with
+ * date field, all together or none (`deleteDraftSlots`). The day is found
+ * again on the signup as it is now and must be one the page offers with
+ * exactly the slots it showed (`findDayFor`, by their fingerprint);
+ * otherwise nothing changes and the answer is `conflict` with
  * `details.reason: 'stale'`, as for a fix: a slot moved into the day or out
  * of it, or added to it, by another tab or an AI assistant since the page
- * loaded. As there, the check runs before the deletes, not inside their
- * transactions.
+ * loaded. As there, that check runs just before the delete, not inside its
+ * transaction, which checks again that each slot is still there and the
+ * signup still a draft.
  *
- * Returns the same as a fix, so `undoDraftFix` is its Undo too. Writes no
- * `review.*` row of its own: each slot's `slot.deleted` records it.
+ * Returns the same as a fix, so `undoDraftFix` is its Undo too. Writes
+ * `review.slots_edited` with `{ kind: 'remove_day' }` once the slots are
+ * gone: best effort and outside the delete's transaction, as it describes
+ * no change of its own (the delete writes `slot.deleted`).
  */
 export async function removeDraftDay(
   db: Db,
@@ -244,17 +218,25 @@ export async function removeDraftDay(
 
   const loaded = await loadDraft(db, actor, signupId);
   if (!loaded.ok) return loaded;
-  const { state } = loaded.value;
+  const { workspaceId, state } = loaded.value;
 
   const day = findDayFor(state, input.value);
   if (!day) return err(conflict('stale', 'the draft no longer has this day as the page showed it'));
 
-  const removed = await removeSlots(db, actor, day.slotIds);
-  if (!removed.ok) return removed;
+  const removed = await deleteDraftSlots(db, actor, signupId, { slotIds: day.slotIds });
+  if (!removed.ok) return err(draftSlotsRefusal(removed.error, 'fix'));
+
+  await recordActivityBestEffort(db, {
+    signupId,
+    workspaceId,
+    actor: activityActor(actor),
+    eventType: 'review.slots_edited',
+    payload: { kind: 'remove_day' },
+  });
   return ok({
     kind: 'remove_day',
-    undo: removeDayUndo(day, state, removed.value),
-    done: removeDayDoneText(day.label, removed.value.length, day.slotIds.length),
+    undo: removeDayUndo(day, state),
+    done: removeDayDoneText(day.label, day.slotIds.length),
   });
 }
 
@@ -340,7 +322,7 @@ async function undo(
     }
     case 'duplicate_slots': {
       const r = await unmergeSlots(db, actor, signupId, plan.unmerge);
-      return r.ok ? ok(null) : err(mergeRefusal(r.error, 'undo'));
+      return r.ok ? ok(null) : err(draftSlotsRefusal(r.error, 'undo'));
     }
   }
 }

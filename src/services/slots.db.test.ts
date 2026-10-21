@@ -1,12 +1,15 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import { getDb, type Db } from '@/db/client';
 import { activity } from '@/db/schema/activity';
+import { commitments } from '@/db/schema/commitments';
 import { workspaceMembers } from '@/db/schema/members';
 import { organizers } from '@/db/schema/organizers';
+import { signups } from '@/db/schema/signups';
 import { slots } from '@/db/schema/slots';
 import { workspaces } from '@/db/schema/workspaces';
 import { makeId } from '@/lib/ids';
+import { ServiceException } from '@/lib/errors';
 import type { Actor } from '@/lib/policy';
 import { commitToSlot } from '@/services/commitments';
 import { createSignup, deleteSignup, publishSignup, updateSignup } from '@/services/signups';
@@ -14,6 +17,7 @@ import { deleteField, listFieldsForSignup } from '@/services/slot-fields';
 import {
   addSlot,
   addSlotsBulk,
+  deleteDraftSlots,
   deleteSlot,
   listSlotsForSignup,
   reorderSlots,
@@ -1019,6 +1023,158 @@ describe('slot writes and the signup lock (db)', () => {
     expect(row?.values).toEqual({ day: '2026-05-10' });
   });
 
+
+// The review page's Remove day and its fix for empty slots: several of a
+// draft's slots deleted together, or none.
+describe('deleteDraftSlots (db)', () => {
+  let fx: Fixture;
+  beforeAll(async () => {
+    fx = await setupWorkspace();
+  });
+  afterAll(async () => {
+    await teardownWorkspace(fx.db, fx.workspaceId, fx.organizerId);
+  });
+
+  const deletes = async (signupId: string) =>
+    fx.db
+      .select({ payload: activity.payload })
+      .from(activity)
+      .where(and(eq(activity.signupId, signupId), eq(activity.eventType, 'slot.deleted')));
+
+  it('deletes them all in one go and writes one slot.deleted row for them', async () => {
+    const { signupId, idOf } = await makeSignup(fx, 'Delete together', [0, 1, 2, 3]);
+    // Out of the order they're shown, which the result and the row use.
+    const r = await deleteDraftSlots(fx.db, fx.actor, signupId, {
+      slotIds: [idOf('d'), idOf('b')],
+    });
+    expect(r).toEqual({ ok: true, value: { slotIds: [idOf('b'), idOf('d')] } });
+    expect((await shown(fx, signupId)).names).toEqual(['a', 'c']);
+    expect(await deletes(signupId)).toEqual([
+      {
+        payload: expect.objectContaining({
+          bulk: true,
+          count: 2,
+          slotIds: [idOf('b'), idOf('d')],
+          commitmentsRemoved: 0,
+          places: 0,
+        }),
+      },
+    ]);
+  });
+
+  it('refuses a slot that isn’t one of the signup’s, and deletes none', async () => {
+    const { signupId, idOf } = await makeSignup(fx, 'Delete unknown', [0, 1, 2]);
+    const other = await makeSignup(fx, 'Another signup', [0]);
+    const gone = await deleteSlot(fx.db, fx.actor, idOf('c'));
+    expect(gone.ok).toBe(true);
+    for (const stranger of [idOf('c'), other.idOf('a'), 'slot_nope']) {
+      const r = await deleteDraftSlots(fx.db, fx.actor, signupId, {
+        slotIds: [idOf('a'), stranger],
+      });
+      expect(r.ok).toBe(false);
+      if (!r.ok) {
+        expect(r.error).toMatchObject({
+          code: 'invalid_input',
+          field: 'slotIds',
+          details: { unknown: [stranger] },
+        });
+      }
+    }
+    expect((await shown(fx, signupId)).names).toEqual(['a', 'b']);
+    expect((await shown(fx, other.signupId)).names).toEqual(['a']);
+    // Only deleteSlot's own row.
+    expect(await deletes(signupId)).toHaveLength(1);
+  });
+
+  it('refuses input it can’t take: none, the same slot twice, more than Undo adds back', async () => {
+    const { signupId, idOf } = await makeSignup(fx, 'Delete input', [0, 1]);
+    const cases: unknown[] = [
+      { slotIds: [] },
+      { slotIds: [idOf('a'), idOf('a')] },
+      { slotIds: Array.from({ length: 501 }, (_, i) => `slot_${i}`) },
+      { slotIds: [idOf('a')], force: true },
+    ];
+    for (const input of cases) {
+      const r = await deleteDraftSlots(fx.db, fx.actor, signupId, input);
+      expect(r.ok, JSON.stringify(input).slice(0, 80)).toBe(false);
+      if (!r.ok) expect(r.error.code).toBe('invalid_input');
+    }
+    expect((await shown(fx, signupId)).names).toEqual(['a', 'b']);
+  });
+
+  it('refuses a signup that isn’t a draft, and deletes nothing', async () => {
+    const { signupId, idOf } = await makeSignup(fx, 'Delete published', [0, 1]);
+    expect((await publishSignup(fx.db, fx.actor, signupId)).ok).toBe(true);
+    const r = await deleteDraftSlots(fx.db, fx.actor, signupId, { slotIds: [idOf('a')] });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toMatchObject({ code: 'conflict', field: 'status' });
+    expect((await shown(fx, signupId)).names).toEqual(['a', 'b']);
+    expect(await deletes(signupId)).toHaveLength(0);
+  });
+
+  it('refuses once a publish that it waited behind has landed, and deletes nothing', async () => {
+    const { signupId, idOf } = await makeSignup(fx, 'Delete during publish', [0, 1]);
+    let deleting: ReturnType<typeof deleteDraftSlots> | undefined;
+    const held = fx.db.transaction(async (tx) => {
+      const pub = await publishSignup(tx as unknown as Db, fx.actor, signupId);
+      expect(pub.ok, JSON.stringify(pub)).toBe(true);
+      // Still sees a draft, since the publish has not committed.
+      deleting = deleteDraftSlots(fx.db, fx.actor, signupId, {
+        slotIds: [idOf('a'), idOf('b')],
+      });
+      await untilServiceBlockedOn(fx.db, tx, deleting);
+    });
+    await held.finally(() => settle(deleting));
+    const r = await deleting!;
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toMatchObject({ code: 'conflict', field: 'status' });
+    expect((await shown(fx, signupId)).names).toEqual(['a', 'b']);
+  });
+
+  it('refuses a slot someone has signed up for, and deletes none', async () => {
+    const { signupId, idOf } = await makeSignup(fx, 'Delete booked', [0, 1]);
+    expect((await publishSignup(fx.db, fx.actor, signupId)).ok).toBe(true);
+    const committed = await commitToSlot(fx.db, idOf('b'), {
+      name: 'Pat Example',
+      email: 'pat@example.com',
+    });
+    expect(committed.ok, JSON.stringify(committed)).toBe(true);
+    // No service puts a signup back to draft; this is the case that cannot
+    // happen today, made by hand.
+    await fx.db.update(signups).set({ status: 'draft' }).where(eq(signups.id, signupId));
+
+    const r = await deleteDraftSlots(fx.db, fx.actor, signupId, {
+      slotIds: [idOf('a'), idOf('b')],
+    });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toMatchObject({ code: 'conflict', details: { commitments: 1 } });
+    expect((await shown(fx, signupId)).names).toEqual(['a', 'b']);
+    const kept = await fx.db
+      .select()
+      .from(commitments)
+      .where(eq(commitments.slotId, idOf('b')));
+    expect(kept).toHaveLength(1);
+  });
+
+  it('refuses a viewer, and a deleted signup as not found', async () => {
+    const { signupId, idOf } = await makeSignup(fx, 'Delete refused', [0, 1]);
+    const viewer: Actor = {
+      kind: 'organizer',
+      id: makeId('org'),
+      email: 'viewer@example.test',
+      workspaceIds: [fx.workspaceId],
+      workspaceRoles: { [fx.workspaceId]: 'viewer' },
+    };
+    await expect(
+      deleteDraftSlots(fx.db, viewer, signupId, { slotIds: [idOf('a')] }),
+    ).rejects.toBeInstanceOf(ServiceException);
+    expect((await deleteSignup(fx.db, fx.actor, signupId)).ok).toBe(true);
+    const r = await deleteDraftSlots(fx.db, fx.actor, signupId, { slotIds: [idOf('a')] });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error.code).toBe('not_found');
+    expect(await deletes(signupId)).toHaveLength(0);
+  });
+});
   it('updateSlot does not deadlock with someone signing up for the same slot', async () => {
     const { signupId, slotId } = await makeOpenSignupWithSlot(fx, 'Edit during sign-up', 5);
     const r = await whileSigningUp(fx.db, { signupId, workspaceId: fx.workspaceId, slotId }, () =>

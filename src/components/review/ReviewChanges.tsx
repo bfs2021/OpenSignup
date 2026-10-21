@@ -2,6 +2,7 @@
 
 import {
   createContext,
+  useCallback,
   useContext,
   useEffect,
   useRef,
@@ -30,6 +31,18 @@ interface LastChange {
   undo: DraftFixUndo | null;
 }
 
+/**
+ * Why the last change or Undo was refused. `key` is the control that shows it
+ * beside itself; null for the card's line.
+ */
+interface Refusal {
+  text: string;
+  key: string | null;
+}
+
+/** Runs before a change; false stops it. */
+type BeforeChange = () => Promise<boolean>;
+
 interface ReviewChange {
   /** A change or an Undo is in flight: every control that makes one waits. */
   pending: boolean;
@@ -37,9 +50,15 @@ interface ReviewChange {
   busy: (key: string) => boolean;
   /**
    * Makes a change: `send` asks the server for it; `failed` is what to say
-   * when no answer comes back, offline say.
+   * when no answer comes back, offline say. With `own`, a refusal shows
+   * beside the control `key` (`refusalFor`) rather than on the card's line.
    */
-  change: (key: string, send: () => Promise<Answer>, failed: string) => void;
+  change: (key: string, send: () => Promise<Answer>, failed: string, own?: boolean) => void;
+  refusalFor: (key: string) => Refusal | null;
+  /** The control `key` is gone: a refusal it showed moves to the card's line. */
+  release: (key: string) => void;
+  /** Sets what runs before every change and Undo; returns its removal. */
+  registerBeforeChange: (run: BeforeChange) => () => void;
 }
 
 const ReviewChangeContext = createContext<ReviewChange | null>(null);
@@ -48,6 +67,16 @@ export function useReviewChange(): ReviewChange {
   const context = useContext(ReviewChangeContext);
   if (!context) throw new Error('needs ReviewChanges around it');
   return context;
+}
+
+/**
+ * Has `run` go first whenever a change or an Undo is made on the card, if
+ * there is a `ReviewChanges` around the caller: the slot list finishes its
+ * open slot with it. When `run` answers false, the change isn't made.
+ */
+export function useBeforeChange(run: BeforeChange): void {
+  const register = useContext(ReviewChangeContext)?.registerBeforeChange;
+  useEffect(() => register?.(run));
 }
 
 /** A spinner on the control whose change is in flight. */
@@ -65,6 +94,12 @@ export function BusySpinner({ show }: { show: boolean }) {
  * replaces it. That line stays when the notices empty, so the last change
  * can still be undone.
  *
+ * Before a change or an Undo is sent, a slot open in the list below is
+ * finished first, as choosing another slot does (`useBeforeChange`): saved,
+ * or, when its save is refused, left open saying why, and the change isn't
+ * made. A change can fold rows away or remove them, and a slot's unsaved
+ * changes would go with its row.
+ *
  * After a change, focus goes to Undo, as the button pressed has gone with
  * its notice or its day; after Undo, to the line. What's inside stays as
  * the server drew it.
@@ -74,11 +109,12 @@ export function ReviewChanges({ signupId, children }: { signupId: string; childr
   // The control whose change is in flight, or 'undo'. Read only while pending.
   const [busyKey, setBusyKey] = useState<string | null>(null);
   const [last, setLast] = useState<LastChange | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [refusal, setRefusal] = useState<Refusal | null>(null);
   const status = useRef<HTMLDivElement>(null);
   const undoButton = useRef<HTMLButtonElement>(null);
   // Where focus goes once the page is back.
   const focusNext = useRef<'undo' | 'status' | null>(null);
+  const beforeChange = useRef<BeforeChange | null>(null);
 
   useEffect(() => {
     if (pending || focusNext.current === null) return;
@@ -86,17 +122,33 @@ export function ReviewChanges({ signupId, children }: { signupId: string; childr
     focusNext.current = null;
   }, [pending, last]);
 
-  function change(key: string, send: () => Promise<Answer>, failed: string) {
-    setError(null);
+  const registerBeforeChange = useCallback((run: BeforeChange) => {
+    beforeChange.current = run;
+    return () => {
+      if (beforeChange.current === run) beforeChange.current = null;
+    };
+  }, []);
+
+  const release = useCallback(
+    (key: string) => setRefusal((r) => (r?.key === key ? { ...r, key: null } : r)),
+    [],
+  );
+
+  /** False when the open slot's save was refused: it says why, and nothing more is done. */
+  const ready = () => (beforeChange.current?.() ?? Promise.resolve(true)).catch(() => false);
+
+  function change(key: string, send: () => Promise<Answer>, failed: string, own = false) {
+    setRefusal(null);
     setBusyKey(key);
     startTransition(async () => {
+      if (!(await ready())) return;
       // A request that never got an answer is said in words rather than left
       // to the page's error screen.
       const result = await send().catch(() => ({ error: failed }));
       startTransition(() => {
         if (!result) return;
         if ('error' in result) {
-          setError(result.error);
+          setRefusal({ text: result.error, key: own ? key : null });
           return;
         }
         focusNext.current = 'undo';
@@ -106,9 +158,10 @@ export function ReviewChanges({ signupId, children }: { signupId: string; childr
   }
 
   function undo(text: string, descriptor: DraftFixUndo) {
-    setError(null);
+    setRefusal(null);
     setBusyKey('undo');
     startTransition(async () => {
+      if (!(await ready())) return;
       const result = await undoDraftFixAction(signupId, descriptor).then(
         (refused) => ({ refused, failed: false }),
         () => ({ refused: null, failed: true }),
@@ -116,21 +169,24 @@ export function ReviewChanges({ signupId, children }: { signupId: string; childr
       startTransition(() => {
         if (result.failed) {
           // Undo stays, to try again.
-          setError('Couldn’t undo that. Try again.');
+          setRefusal({ text: 'Couldn’t undo that. Try again.', key: null });
           return;
         }
         focusNext.current = 'status';
         // Refused: what the change did stays said, without Undo.
         setLast({ text: result.refused ? text : 'Undone.', undo: null });
-        if (result.refused) setError(result.refused.error);
+        if (result.refused) setRefusal({ text: result.refused.error, key: null });
       });
     });
   }
 
   const busy = (key: string) => pending && busyKey === key;
+  const refusalFor = (key: string) => (refusal?.key === key ? refusal : null);
   const lastUndo = last?.undo ?? null;
   return (
-    <ReviewChangeContext.Provider value={{ pending, busy, change }}>
+    <ReviewChangeContext.Provider
+      value={{ pending, busy, change, refusalFor, release, registerBeforeChange }}
+    >
       {/* Out of the card's flow while empty, so it adds no gap, but always
           there, so what a change did is read out as it appears. */}
       <div ref={status} role="status" tabIndex={-1} className={last ? 'outline-none' : 'sr-only'}>
@@ -153,7 +209,7 @@ export function ReviewChanges({ signupId, children }: { signupId: string; childr
           </div>
         ) : null}
       </div>
-      {error ? <FormError>{error}</FormError> : null}
+      {refusal && refusal.key === null ? <FormError>{refusal.text}</FormError> : null}
       {children}
     </ReviewChangeContext.Provider>
   );
@@ -163,7 +219,10 @@ export function ReviewChanges({ signupId, children }: { signupId: string; childr
  * Remove day, in a date's group on the review page: deletes every slot of
  * that day, folded or not, and says so with Undo on the card's line for its
  * changes. In the group, not in its header, which opens and closes it.
- * `name` names the day, as several groups each have one.
+ * `name` names the day, as several groups each have one. A refusal shows
+ * here, under the button, and takes focus, so it isn't missed at the top of
+ * a long list; if the day is gone from the page that came back, it shows on
+ * the card's line instead.
  */
 export function RemoveDayButton({
   signupId,
@@ -175,25 +234,41 @@ export function RemoveDayButton({
   request: RemoveDayRequest;
   name: string;
 }) {
-  const { pending, busy, change } = useReviewChange();
+  const { pending, busy, change, refusalFor, release } = useReviewChange();
   const key = `remove_day:${request.value}`;
+  const refusal = refusalFor(key);
+  const alert = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (refusal) alert.current?.focus();
+  }, [refusal]);
+  useEffect(() => () => release(key), [release, key]);
+
   return (
-    <button
-      type="button"
-      aria-label={name}
-      aria-busy={busy(key)}
-      disabled={pending}
-      onClick={() =>
-        change(
-          key,
-          () => removeDayAction(signupId, request),
-          'Couldn’t remove that day. Try again.',
-        )
-      }
-      className="inline-flex h-9 items-center gap-2 self-end rounded-lg border border-surface-sunk bg-white px-3.5 text-[13px] font-medium text-ink transition hover:bg-surface-raised disabled:cursor-not-allowed disabled:opacity-70"
-    >
-      <BusySpinner show={busy(key)} />
-      Remove day
-    </button>
+    <div className="flex flex-col items-end gap-2">
+      <button
+        type="button"
+        aria-label={name}
+        aria-busy={busy(key)}
+        disabled={pending}
+        onClick={() =>
+          change(
+            key,
+            () => removeDayAction(signupId, request),
+            'Couldn’t remove that day. Try again.',
+            true,
+          )
+        }
+        className="inline-flex h-9 items-center gap-2 rounded-lg border border-surface-sunk bg-white px-3.5 text-[13px] font-medium text-ink transition hover:bg-surface-raised disabled:cursor-not-allowed disabled:opacity-70"
+      >
+        <BusySpinner show={busy(key)} />
+        Remove day
+      </button>
+      {refusal ? (
+        <div ref={alert} tabIndex={-1} className="self-stretch outline-none">
+          <FormError>{refusal.text}</FormError>
+        </div>
+      ) : null}
+    </div>
   );
 }

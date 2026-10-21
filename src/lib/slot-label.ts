@@ -87,6 +87,15 @@ export function renderFieldValue(field: LabelledField, raw: unknown): string | n
 }
 
 /**
+ * A group's header in the slot list: its value of the group field as the page
+ * shows it ("Sat, Apr 6"), or "(no date)" for the slots without one. The
+ * review page's Remove day names its day by it too.
+ */
+export function formatGroupLabel(field: LabelledField, raw: unknown): string {
+  return renderFieldValue(field, raw) ?? `(no ${field.label.toLowerCase()})`;
+}
+
+/**
  * Which group of the slot list a slot's value of the group field puts it in:
  * the value as a string, or `'__unset__'` for the "(no date)" group of slots
  * without one. The public page and the review page group by it

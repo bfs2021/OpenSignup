@@ -1,5 +1,5 @@
-import { and, eq, or, sql } from 'drizzle-orm';
-import type { Db, Queryable } from '@/db/client';
+import { and, eq, or, sql, type Column } from 'drizzle-orm';
+import type { Db, Queryable, Tx } from '@/db/client';
 import { commitments } from '@/db/schema/commitments';
 import { slots } from '@/db/schema/slots';
 import { activityActor, recordActivity } from '@/lib/activity';
@@ -13,11 +13,13 @@ import {
   type SlotUpdateInput,
   SlotBulkInputSchema,
   SlotCreateInputSchema,
+  SlotDeleteDraftInputSchema,
   SlotReorderInputSchema,
   SlotUpdateInputSchema,
 } from '@/schemas/slots';
 import { MAX_SORT_ORDER } from '@/schemas/common';
 import {
+  inWorkspace,
   lockSignupForWrite,
   lockSlot,
   lockSlotsForSignup,
@@ -528,6 +530,124 @@ export async function deleteSlot(
       payload: { slotId, commitmentsRemoved, places },
     });
     return ok({ deleted: true, commitmentsRemoved });
+  });
+}
+
+/**
+ * `column` is one of `ids`. The ids travel as one JSON parameter, as in
+ * `writeSlotOrder`, rather than one placeholder each.
+ */
+export function idIn(column: Column, ids: readonly string[]) {
+  return sql`${column} in (select jsonb_array_elements_text(${JSON.stringify(ids)}::jsonb))`;
+}
+
+/**
+ * Refuses when anyone, in any status, holds a commitment on these slots. A
+ * draft never has any (only `commitToSlot` makes them, on an open signup),
+ * but a merge or `deleteDraftSlots` deleting a slot would delete its
+ * commitments with it, and an undo lowering a capacity could leave more
+ * people than places.
+ */
+export async function refuseCommitments(
+  tx: Tx,
+  workspaceId: string | null,
+  slotIds: readonly string[],
+  field: 'slotIds' | 'keepSlotId',
+): Promise<Result<void, ServiceError>> {
+  const [row] = await tx
+    .select({ n: sql<number>`count(*)::int` })
+    .from(commitments)
+    .where(
+      and(inWorkspace(commitments.workspaceId, workspaceId), idIn(commitments.slotId, slotIds)),
+    );
+  const n = row?.n ?? 0;
+  if (n === 0) return ok(undefined);
+  return err(
+    serviceError(
+      'conflict',
+      `${n} ${n === 1 ? 'sign-up is' : 'sign-ups are'} on these slots, cancelled ones included`,
+      { field, details: { commitments: n } },
+    ),
+  );
+}
+
+/**
+ * Deletes several of a draft's slots in one transaction, all or none: the
+ * review page's Remove day and its fix for empty slots. Under the signup lock
+ * and then its slots' (src/services/locks.ts), it refuses unless the signup
+ * is still a draft (`conflict` on `status`), so a publish that lands while
+ * this waits never loses a live slot; unless every id is one of its slots
+ * (`invalid_input` on `slotIds`, as when another tab deleted one since); and
+ * when anyone holds a commitment on them (`conflict`), which a draft never
+ * has. Writes one `slot.deleted` row for them all, `{ bulk: true, ... }`.
+ * Returns the ids deleted, in the order they were shown.
+ */
+export async function deleteDraftSlots(
+  db: Db,
+  actor: Actor,
+  signupId: string,
+  rawInput: unknown,
+): Promise<Result<{ slotIds: string[] }, ServiceError>> {
+  const input = parseInputSafe(SlotDeleteDraftInputSchema, rawInput);
+  if (!input.ok) return input;
+
+  const found = await readLiveSignup(db, signupId);
+  if (!found) return err(serviceError('not_found', 'signup not found'));
+  requireWorkspaceWrite(actor, found.workspaceId);
+  const { workspaceId } = found;
+
+  return db.transaction(async (tx) => {
+    // Undefined for a soft delete that committed while this waited, too.
+    const signup = await lockSignupForWrite(tx, signupId, workspaceId);
+    if (!signup) return err(serviceError('not_found', 'signup not found'));
+    if (signup.status !== 'draft') {
+      return err(
+        serviceError(
+          'conflict',
+          `slots are deleted together only on a draft, and this signup is ${signup.status}`,
+          { field: 'status', received: signup.status, expected: 'draft' },
+        ),
+      );
+    }
+    const wanted = new Set(input.value.slotIds);
+    const locked = (await lockSlotsForSignup(tx, signupId, workspaceId)).filter((s) =>
+      wanted.has(s.id),
+    );
+    if (locked.length !== wanted.size) {
+      const have = new Set(locked.map((s) => s.id));
+      const unknown = input.value.slotIds.filter((id) => !have.has(id));
+      return err(
+        serviceError('invalid_input', `slot ${unknown[0]} is not a slot of this signup`, {
+          field: 'slotIds',
+          received: unknown[0],
+          details: { unknown },
+          suggestion: 'reload the signup: a slot may have been deleted since',
+        }),
+      );
+    }
+    const slotIds = locked.map((s) => s.id);
+    const booked = await refuseCommitments(tx, workspaceId, slotIds, 'slotIds');
+    if (!booked.ok) return booked;
+
+    await tx
+      .delete(slots)
+      .where(
+        and(
+          eq(slots.signupId, signupId),
+          inWorkspace(slots.workspaceId, workspaceId),
+          idIn(slots.id, slotIds),
+        ),
+      );
+    // The shape `slot.created` has for a bulk add. Nobody had signed up, so
+    // nothing went with them.
+    await recordActivity(tx, {
+      signupId,
+      workspaceId,
+      actor: activityActor(actor),
+      eventType: 'slot.deleted',
+      payload: { bulk: true, count: slotIds.length, slotIds, commitmentsRemoved: 0, places: 0 },
+    });
+    return ok({ slotIds });
   });
 }
 

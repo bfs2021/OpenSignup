@@ -1,12 +1,14 @@
 // @vitest-environment jsdom
 
 import '@testing-library/jest-dom/vitest';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import type { BuildField } from '@/components/build-shared/useBuildState';
 import type { NoticeView } from '@/lib/draft-notices';
 import type { DraftFixUndo, RemoveDayRequest } from '@/schemas/draft-fixes';
 import { NoticeFixes } from './NoticeFixes';
 import { RemoveDayButton, ReviewChanges } from './ReviewChanges';
+import { ReviewSlotEditing, ReviewSlotRow } from './ReviewSlotRow';
 
 const actions = vi.hoisted(() => ({
   applyDraftFixAction: vi.fn(),
@@ -14,6 +16,11 @@ const actions = vi.hoisted(() => ({
   undoDraftFixAction: vi.fn(),
 }));
 vi.mock('@/app/app/(chrome)/signups/[id]/actions', () => actions);
+
+const router = vi.hoisted(() => ({ refresh: vi.fn() }));
+vi.mock('next/navigation', () => ({ useRouter: () => router }));
+
+const fetchMock = vi.fn<typeof fetch>();
 
 const BLANK: NoticeView = {
   kind: 'blank_slot',
@@ -31,7 +38,7 @@ const DAY: RemoveDayRequest = {
   kind: 'remove_day',
   ref: 'date',
   value: '2030-04-06',
-  slotIds: ['a', 'b'],
+  fingerprint: '2.abcdefghijklmnop',
 };
 
 const DAY_UNDO: DraftFixUndo = {
@@ -46,9 +53,23 @@ const BLANK_UNDO: DraftFixUndo = {
   slots: [{ values: {}, capacity: 1, sortOrder: 2, closed: false }],
 };
 
-/** The slots card's changes, as the page draws them: the notices, then a day. */
-function renderCard() {
-  return render(
+const FIELDS: BuildField[] = [
+  {
+    id: 'fld_what',
+    ref: 'what',
+    name: 'What',
+    config: { fieldType: 'text', maxLength: 200 },
+    sortOrder: 0,
+  },
+];
+
+/**
+ * The slots card's changes, as the page draws them: the notices, then the
+ * slot list with a day's Remove day and a slot, or, with `day: false`, the
+ * list after that day has gone.
+ */
+function Card({ day = true }: { day?: boolean }) {
+  return (
     <ReviewChanges signupId="sig_1">
       <NoticeFixes
         signupId="sig_1"
@@ -57,9 +78,28 @@ function renderCard() {
         builderHref="/app/signups/sig_1/build"
         labelMaxLength={80}
       />
-      <RemoveDayButton signupId="sig_1" request={DAY} name="Remove day: Sat, Apr 6" />
-    </ReviewChanges>,
+      <ReviewSlotEditing signupId="sig_1" fields={FIELDS} id="slots" className="" allDrawn>
+        {day ? (
+          <RemoveDayButton signupId="sig_1" request={DAY} name="Remove day: Sat, Apr 6" />
+        ) : null}
+        <ul>
+          <ReviewSlotRow slot={{ id: 'slot_1', values: { what: 'Napkins' }, capacity: 1 }}>
+            Napkins
+          </ReviewSlotRow>
+        </ul>
+      </ReviewSlotEditing>
+    </ReviewChanges>
   );
+}
+
+function renderCard() {
+  return render(<Card />);
+}
+
+/** Opens the slot, changes its capacity, and leaves it open. */
+async function editSlot() {
+  fireEvent.click(screen.getByRole('button', { name: /^Edit slot — Napkins/ }));
+  fireEvent.change(await screen.findByLabelText('Capacity'), { target: { value: '3' } });
 }
 
 const removeDay = () => screen.getByRole('button', { name: 'Remove day: Sat, Apr 6' });
@@ -74,6 +114,13 @@ function deferred<T>() {
 
 beforeEach(() => {
   for (const action of Object.values(actions)) action.mockReset();
+  router.refresh.mockReset();
+  fetchMock.mockReset();
+  vi.stubGlobal('fetch', fetchMock);
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
 });
 
 describe('<ReviewChanges />', () => {
@@ -84,7 +131,7 @@ describe('<ReviewChanges />', () => {
     expect(removeDay()).toHaveTextContent('Remove day');
 
     fireEvent.click(removeDay());
-    expect(actions.removeDayAction).toHaveBeenCalledWith('sig_1', DAY);
+    await waitFor(() => expect(actions.removeDayAction).toHaveBeenCalledWith('sig_1', DAY));
     // Every change waits while one is in flight.
     await waitFor(() => expect(removeDay()).toBeDisabled());
     expect(removeDay()).toHaveAttribute('aria-busy', 'true');
@@ -110,7 +157,9 @@ describe('<ReviewChanges />', () => {
     expect(await screen.findByText('Undone.')).toBeInTheDocument();
     expect(actions.undoDraftFixAction).toHaveBeenCalledWith('sig_1', DAY_UNDO);
     expect(undoButton()).toBeNull();
-    await waitFor(() => expect(screen.getByRole('status')).toHaveFocus());
+    await waitFor(() =>
+      expect(screen.getByText('Undone.').closest('[role="status"]')).toHaveFocus(),
+    );
   });
 
   it('keeps one line: a fix after Remove day replaces its Undo, and the other way round', async () => {
@@ -141,7 +190,7 @@ describe('<ReviewChanges />', () => {
     expect(actions.undoDraftFixAction.mock.calls).toEqual([['sig_1', DAY_UNDO]]);
   });
 
-  it('says why a Remove day was refused, and keeps the last change’s Undo', async () => {
+  it('says why a Remove day was refused by its button, with focus, and keeps the last Undo', async () => {
     actions.applyDraftFixAction.mockResolvedValue({
       done: 'Removed the empty slot.',
       undo: BLANK_UNDO,
@@ -154,21 +203,120 @@ describe('<ReviewChanges />', () => {
     await screen.findByText('Removed the empty slot.');
 
     fireEvent.click(removeDay());
-    expect(await screen.findByRole('alert')).toHaveTextContent(
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent(
       'That changed since you opened this page, so nothing was done.',
     );
+    // Under the button pressed, not at the top of the card.
+    expect(removeDay().parentElement).toContainElement(alert);
+    await waitFor(() => expect(alert.parentElement).toHaveFocus());
     expect(screen.getByText('Removed the empty slot.')).toBeInTheDocument();
     expect(undoButton()).toBeInTheDocument();
+  });
+
+  it('moves a Remove day refusal to the card’s line once its day is gone from the page', async () => {
+    actions.removeDayAction.mockResolvedValue({
+      error: 'That changed since you opened this page, so nothing was done.',
+    });
+    const { rerender } = renderCard();
+    fireEvent.click(removeDay());
+    await screen.findByRole('alert');
+    // The page that came back no longer has the day.
+    rerender(<Card day={false} />);
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'That changed since you opened this page, so nothing was done.',
+    );
+  });
+
+  it('says why a fix was refused on the card’s line, not by Remove day', async () => {
+    actions.applyDraftFixAction.mockResolvedValue({
+      error: 'That changed since you opened this page, so nothing was done.',
+    });
+    renderCard();
+    fireEvent.click(screen.getByRole('button', { name: 'Remove it' }));
+    const alert = await screen.findByRole('alert');
+    expect(removeDay().parentElement).not.toContainElement(alert);
   });
 
   it('says so in words when no answer comes back', async () => {
     actions.removeDayAction.mockRejectedValue(new Error('offline'));
     renderCard();
     fireEvent.click(removeDay());
-    expect(await screen.findByRole('alert')).toHaveTextContent(
-      'Couldn’t remove that day. Try again.',
-    );
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent('Couldn’t remove that day. Try again.');
+    expect(removeDay().parentElement).toContainElement(alert);
     expect(removeDay()).toBeEnabled();
+  });
+
+  it('saves an open, changed slot before Remove day, then removes the day', async () => {
+    fetchMock.mockResolvedValue(new Response(JSON.stringify({ data: {} }), { status: 200 }));
+    actions.removeDayAction.mockResolvedValue({
+      done: 'Removed Sat, Apr 6 and its 2 slots.',
+      undo: DAY_UNDO,
+    });
+    renderCard();
+    await editSlot();
+
+    fireEvent.click(removeDay());
+    expect(await screen.findByText('Removed Sat, Apr 6 and its 2 slots.')).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(String(fetchMock.mock.calls[0]?.[0])).toBe('/api/slots/slot_1');
+    expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toEqual({ capacity: 3 });
+    expect(fetchMock.mock.invocationCallOrder[0]).toBeLessThan(
+      actions.removeDayAction.mock.invocationCallOrder[0]!,
+    );
+    // Focus goes where the change sends it, not back to the slot's row.
+    await waitFor(() => expect(undoButton()).toHaveFocus());
+  });
+
+  it('makes no change when the open slot’s save is refused, and leaves it open saying why', async () => {
+    fetchMock.mockResolvedValue(
+      new Response(JSON.stringify({ error: { code: 'conflict', message: 'x' } }), { status: 409 }),
+    );
+    renderCard();
+    await editSlot();
+
+    fireEvent.click(removeDay());
+    expect(await screen.findByRole('alert')).toHaveTextContent('Reload to see the latest changes.');
+    await waitFor(() => expect(removeDay()).toBeEnabled());
+    expect(actions.removeDayAction).not.toHaveBeenCalled();
+    expect(screen.getByLabelText('Capacity')).toHaveValue(3);
+  });
+
+  it('saves an open, changed slot before Undo too', async () => {
+    fetchMock.mockResolvedValue(new Response(JSON.stringify({ data: {} }), { status: 200 }));
+    actions.applyDraftFixAction.mockResolvedValue({
+      done: 'Removed the empty slot.',
+      undo: BLANK_UNDO,
+    });
+    actions.undoDraftFixAction.mockResolvedValue(null);
+    renderCard();
+    fireEvent.click(screen.getByRole('button', { name: 'Remove it' }));
+    await screen.findByText('Removed the empty slot.');
+    await editSlot();
+
+    fireEvent.click(undoButton()!);
+    expect(await screen.findByText('Undone.')).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(fetchMock.mock.invocationCallOrder[0]).toBeLessThan(
+      actions.undoDraftFixAction.mock.invocationCallOrder[0]!,
+    );
+  });
+
+  it('closes an open slot with nothing changed before a change, without a request', async () => {
+    actions.applyDraftFixAction.mockResolvedValue({
+      done: 'Removed the empty slot.',
+      undo: BLANK_UNDO,
+    });
+    renderCard();
+    fireEvent.click(screen.getByRole('button', { name: /^Edit slot — Napkins/ }));
+    await screen.findByLabelText('Capacity');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Remove it' }));
+    await screen.findByText('Removed the empty slot.');
+    expect(screen.queryByLabelText('Capacity')).toBeNull();
+    expect(fetchMock).not.toHaveBeenCalled();
+    await waitFor(() => expect(undoButton()).toHaveFocus());
   });
 
   it('keeps what Remove day did said, without Undo, when the undo is refused', async () => {

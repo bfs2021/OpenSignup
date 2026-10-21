@@ -42,6 +42,20 @@ export const SlotReorderInputSchema = z.object({
   slotIds: z.array(z.string()).min(1),
 });
 
+/**
+ * Slots of a draft to delete together, all or none (`deleteDraftSlots`): as
+ * many as one bulk add puts back, each once.
+ */
+export const SlotDeleteDraftInputSchema = z
+  .object({
+    slotIds: z
+      .array(z.string().min(1).max(64))
+      .min(1)
+      .max(SLOTS_PER_BULK_ADD)
+      .refine((ids) => new Set(ids).size === ids.length, 'each slot is listed once'),
+  })
+  .strict();
+
 export const SlotUpdateInputSchema = z
   .object({
     values: SlotValuesSchema.optional(),

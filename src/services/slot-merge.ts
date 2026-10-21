@@ -1,6 +1,5 @@
-import { and, eq, sql, type Column } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import type { Db, Tx } from '@/db/client';
-import { commitments } from '@/db/schema/commitments';
 import { slots } from '@/db/schema/slots';
 import { activityActor, recordActivity } from '@/lib/activity';
 import { findDuplicateSlots } from '@/lib/draft-checks';
@@ -15,7 +14,7 @@ import {
 } from '@/schemas/slots';
 import { inWorkspace, lockSignupForWrite, lockSlotsForSignup, readLiveSignup } from './locks';
 import { extractSlotAt, listFieldsForSignup, validateSlotValues } from './slot-fields';
-import { insertSlot } from './slots';
+import { idIn, insertSlot, refuseCommitments } from './slots';
 
 /**
  * Merging copies of a slot into one, and undoing it: the one-tap fix for
@@ -55,14 +54,6 @@ function sameValues(a: Record<string, unknown>, b: Record<string, unknown>): boo
 }
 
 /**
- * `column` is one of `ids`. The ids travel as one JSON parameter, as in
- * `writeSlotOrder`, rather than one placeholder each.
- */
-function idIn(column: Column, ids: readonly string[]) {
-  return sql`${column} in (select jsonb_array_elements_text(${JSON.stringify(ids)}::jsonb))`;
-}
-
-/**
  * The signup locked, then its slots in the shared order (src/services/locks.ts),
  * refused unless it is still a live draft. Everything a merge or its undo
  * checks is read under these locks: an add, edit, reorder or publish of this
@@ -90,35 +81,6 @@ async function lockDraft(
   }
   const locked = await lockSlotsForSignup(tx, signupId, workspaceId);
   return ok({ settings: (signup.settings as ReminderSettingsLike) ?? {}, slots: locked });
-}
-
-/**
- * Refuses when anyone, in any status, holds a commitment on these slots. A
- * draft never has any (only `commitToSlot` makes them, on an open signup),
- * but a merge deleting a slot would delete its commitments with it, and an
- * undo lowering a capacity could leave more people than places.
- */
-async function refuseCommitments(
-  tx: Tx,
-  workspaceId: string | null,
-  slotIds: readonly string[],
-  field: 'slotIds' | 'keepSlotId',
-): Promise<Result<void, ServiceError>> {
-  const [row] = await tx
-    .select({ n: sql<number>`count(*)::int` })
-    .from(commitments)
-    .where(
-      and(inWorkspace(commitments.workspaceId, workspaceId), idIn(commitments.slotId, slotIds)),
-    );
-  const n = row?.n ?? 0;
-  if (n === 0) return ok(undefined);
-  return err(
-    serviceError(
-      'conflict',
-      `${n} ${n === 1 ? 'sign-up is' : 'sign-ups are'} on these slots, cancelled ones included`,
-      { field, details: { commitments: n } },
-    ),
-  );
 }
 
 /**

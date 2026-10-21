@@ -48,6 +48,7 @@ export const ACTIVITY_EVENTS = [
   'review.notice_shown',
   'review.notice_accepted',
   'review.fix_undone',
+  'review.slots_edited',
   'slot.created',
   'slot.updated',
   'slot.deleted',

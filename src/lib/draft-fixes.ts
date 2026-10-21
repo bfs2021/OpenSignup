@@ -10,6 +10,7 @@
  * back loses only its id and its internal `ref`, neither of which anyone sees.
  */
 
+import { createHash } from 'node:crypto';
 import { serviceError, type ServiceError } from '@/lib/errors';
 import type {
   DraftFixKind,
@@ -33,7 +34,7 @@ import {
 } from './draft-checks';
 import { resolveAnchorRef } from './reminder-fields';
 import { groupByRef, hasFilledSlot } from './signup-summary';
-import { groupKeyOf, renderFieldValue } from './slot-label';
+import { formatGroupLabel, groupKeyOf } from './slot-label';
 
 /** A notice of one of the kinds with a one-tap fix (`DraftFixKind`). */
 export type FixableNotice = DraftNoticeOf<DraftFixKind>;
@@ -152,17 +153,17 @@ export function mergeRequestFor(notice: DraftNoticeOf<'duplicate_slots'>): {
 }
 
 /**
- * A refusal from `mergeSlots` or `unmergeSlots`, as the page words the
- * others' (`details.reason`). Only what a change made since causes reads as
- * one: for a merge, a slot gone, closed, booked or no longer a copy
- * ('stale'); for an undo, the kept slot gone or changed ('changed'); for
- * either, a signup no longer a draft. Anything else can't be waited out, so
- * it isn't called a change, which would offer the same button again: a merge
- * becomes a plain `invalid_input`. The service's `field` never passes on: it
- * can be a slot field's ref, and a ref of 'label' would read as the rename
- * box's refusal.
+ * A refusal from `mergeSlots`, `unmergeSlots` or `deleteDraftSlots`, as the
+ * page words the others' (`details.reason`). Only what a change made since
+ * causes reads as one: for a merge or a delete, a slot gone, closed, booked
+ * or no longer a copy ('stale'); for an undo, the kept slot gone or changed
+ * ('changed'); for any of them, a signup no longer a draft. Anything else
+ * can't be waited out, so it isn't called a change, which would offer the
+ * same button again: it becomes a plain `invalid_input`. The service's
+ * `field` never passes on: it can be a slot field's ref, and a ref of
+ * 'label' would read as the rename box's refusal.
  */
-export function mergeRefusal(error: ServiceError, step: 'fix' | 'undo'): ServiceError {
+export function draftSlotsRefusal(error: ServiceError, step: 'fix' | 'undo'): ServiceError {
   const { code, message } = error;
   const because = (reason: 'not_draft' | 'stale' | 'changed') =>
     serviceError('conflict', message, { details: { reason } });
@@ -405,8 +406,22 @@ export interface RemovableDay {
   value: string;
   /** The day as the group's header shows it: "Sat, Apr 6". */
   label: string;
-  /** Every slot in the group, in list order, folded or not. */
+  /** Every slot in the group, in list order, folded or not. Server-side only. */
   slotIds: string[];
+  /** Stands for `slotIds` in what the page sends (`slotSetFingerprint`). */
+  fingerprint: string;
+}
+
+/**
+ * A short stand-in for a set of slots, whatever their order: how many, and a
+ * hash of their ids. Remove day sends it in place of every id, and the server
+ * works it out again from the slots as they are now; a slot added, moved or
+ * deleted since changes it.
+ */
+export function slotSetFingerprint(slotIds: readonly string[]): string {
+  const sorted = [...slotIds].sort();
+  const hash = createHash('sha256').update(sorted.join('\n')).digest('base64url').slice(0, 16);
+  return `${sorted.length}.${hash}`;
 }
 
 /**
@@ -445,22 +460,24 @@ export function removableDays(signup: {
           {
             ref: field.ref,
             value,
-            label: renderFieldValue(field, value) ?? value,
+            label: formatGroupLabel(field, value),
             slotIds: day.ids,
+            fingerprint: slotSetFingerprint(day.ids),
           },
         ]
       : [],
   );
 }
 
-/** What the review page's Remove day sends for `day`. */
+/** What the review page's Remove day sends for `day`: no slot ids, only their fingerprint. */
 export function removeDayRequest(day: RemovableDay): RemoveDayRequest {
-  return { kind: 'remove_day', ref: day.ref, value: day.value, slotIds: day.slotIds };
+  return { kind: 'remove_day', ref: day.ref, value: day.value, fingerprint: day.fingerprint };
 }
 
 /**
  * The day `request` is about, on the draft as it is now, or null: it has to
- * be one the page would offer, with exactly the same slots, as for a fix
+ * be one the page would offer, with exactly the same slots (the same
+ * fingerprint), as a fix must find exactly the slots its notice named
  * (`findNoticeFor`). A slot moved into the day or out of it since, the page
  * grouped another way, or the day gone already, and nothing is removed.
  */
@@ -471,24 +488,22 @@ export function findDayFor(
   return (
     removableDays(state).find(
       (d) =>
-        d.ref === request.ref && d.value === request.value && sameIds(d.slotIds, request.slotIds),
+        d.ref === request.ref &&
+        d.value === request.value &&
+        d.fingerprint === request.fingerprint,
     ) ?? null
   );
 }
 
 /**
- * How to undo Remove day: the slots it took out as they were, from the
- * signup as it was just before. `removed` is those it did take out.
+ * How to undo Remove day: the day's slots as they were, from the signup as it
+ * was just before. They are deleted all together or not at all.
  */
-export function removeDayUndo(
-  day: RemovableDay,
-  before: DraftState,
-  removed: readonly string[],
-): DraftFixUndo {
+export function removeDayUndo(day: RemovableDay, before: DraftState): DraftFixUndo {
   return {
     kind: 'remove_day',
     ref: day.ref,
     value: day.value,
-    slots: removedSlots(before, removed),
+    slots: removedSlots(before, day.slotIds),
   };
 }

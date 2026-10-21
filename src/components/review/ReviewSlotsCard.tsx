@@ -104,6 +104,7 @@ export function ReviewSlotsCard({
           fields={toBuildFields(fields)}
           id="slots"
           className="flex scroll-mt-4 flex-col gap-3.5 pt-1 outline-none"
+          allDrawn={showAll || plan.hiddenCount === 0}
         >
           {groups.map((group, i) => {
             const fold = plan.groups[i];
@@ -178,7 +179,7 @@ export function ReviewSlotsCard({
                     <RemoveDayButton
                       signupId={signupId}
                       request={removeDayRequest(day)}
-                      name={`Remove day: ${group.label}`}
+                      name={`Remove day: ${day.label}`}
                     />
                   ) : null}
                   {rows}

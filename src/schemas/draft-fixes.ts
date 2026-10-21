@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { SortOrderSchema } from './common';
-import { FIELD_TYPES, LABEL_MAX_LENGTH, SlotFieldConfigSchema } from './slot-fields';
+import { FIELD_TYPES, LABEL_MAX_LENGTH, RefSchema, SlotFieldConfigSchema } from './slot-fields';
 import { MAX_MERGE_SLOTS, SLOTS_PER_BULK_ADD, SlotUnmergeInputSchema } from './slots';
 
 const IdSchema = z.string().min(1).max(64);
@@ -41,22 +41,20 @@ export type DraftFixRequest = z.infer<typeof DraftFixRequestSchema>;
  */
 export type DraftFixKind = DraftFixRequest['kind'];
 
-/** A field's ref, as the undos name one. */
-const RefSchema = z.string().min(1).max(64);
-
 /**
  * The review page's Remove day (issue #504): every slot of one group of its
  * slot list, on a page grouped by a date field. `value` is the group's value
- * of that field (its key in `groupSlots`) and `slotIds` every slot the page
- * showed in it, so the server can find the same day again on fresh data.
- * Undo puts the slots back in one go, so a day holds at most that many.
+ * of that field (its key in `groupSlots`), and `fingerprint` stands for the
+ * slots the page showed in it (`slotSetFingerprint`), so the server can find
+ * the same day, with the same slots, again on fresh data without the page
+ * holding every slot's id.
  */
 export const RemoveDayRequestSchema = z
   .object({
     kind: z.literal('remove_day'),
     ref: RefSchema,
     value: z.string().min(1).max(2000),
-    slotIds: z.array(IdSchema).min(1).max(SLOTS_PER_BULK_ADD),
+    fingerprint: z.string().min(1).max(64),
   })
   .strict();
 export type RemoveDayRequest = z.infer<typeof RemoveDayRequestSchema>;

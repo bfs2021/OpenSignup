@@ -56,6 +56,7 @@ function renderList(extraFields: BuildField[] = []) {
       fields={[...FIELDS, ...extraFields]}
       id="slots"
       className=""
+      allDrawn
     >
       <ul>
         <ReviewSlotRow slot={SLOTS[0]!}>
@@ -190,7 +191,7 @@ describe('<ReviewSlotRow />', () => {
 
   it('names each row "Edit slot — " and what it shows, with its group', () => {
     render(
-      <ReviewSlotEditing signupId="sig_1" fields={FIELDS} id="slots" className="">
+      <ReviewSlotEditing signupId="sig_1" fields={FIELDS} id="slots" className="" allDrawn>
         <ul>
           <ReviewSlotRow slot={SLOTS[0]!}>
             <RowContents title="Fruit and water" people="2 people" group="Sat, Apr 6" />
@@ -289,36 +290,50 @@ describe('<ReviewSlotRow />', () => {
     expect(rowButton('Napkins')).toHaveAttribute('aria-expanded', 'true');
   });
 
-  it('closes a slot that leaves the list while open, as its day is removed', async () => {
-    const { rerender } = renderList();
+  /** The list as the page draws it, with only these of its slots' rows. */
+  function List({ rows, allDrawn }: { rows: (0 | 1)[]; allDrawn: boolean }) {
+    const titles = ['Fruit and water', 'Napkins'];
+    return (
+      <ReviewSlotEditing
+        signupId="sig_1"
+        fields={FIELDS}
+        id="slots"
+        className=""
+        allDrawn={allDrawn}
+      >
+        <ul>
+          {rows.map((i) => (
+            <ReviewSlotRow key={i} slot={SLOTS[i]!}>
+              <RowContents title={titles[i]!} people="1 person" />
+            </ReviewSlotRow>
+          ))}
+        </ul>
+      </ReviewSlotEditing>
+    );
+  }
+
+  it('closes a slot gone from the page that came back, deleted in another tab say', async () => {
+    const { rerender } = render(<List rows={[0, 1]} allDrawn />);
     await open('Fruit and water');
-    // The page comes back without it.
-    rerender(
-      <ReviewSlotEditing signupId="sig_1" fields={FIELDS} id="slots" className="">
-        <ul>
-          <ReviewSlotRow slot={SLOTS[1]!}>
-            <RowContents title="Napkins" people="1 person" />
-          </ReviewSlotRow>
-        </ul>
-      </ReviewSlotEditing>,
-    );
+    // Every slot has its row, and it has none: the slot is gone.
+    rerender(<List rows={[1]} allDrawn />);
     expect(screen.queryByLabelText('What value')).toBeNull();
-    // And with it again, as after Undo: closed, not opened again on its own.
-    rerender(
-      <ReviewSlotEditing signupId="sig_1" fields={FIELDS} id="slots" className="">
-        <ul>
-          <ReviewSlotRow slot={SLOTS[0]!}>
-            <RowContents title="Fruit and water" people="2 people" />
-          </ReviewSlotRow>
-          <ReviewSlotRow slot={SLOTS[1]!}>
-            <RowContents title="Napkins" people="1 person" />
-          </ReviewSlotRow>
-        </ul>
-      </ReviewSlotEditing>,
-    );
+    // A row of that id again stays closed: it isn't opened on its own.
+    rerender(<List rows={[0, 1]} allDrawn />);
     expect(rowButton('Fruit and water')).toHaveAttribute('aria-expanded', 'false');
     expect(screen.queryByLabelText('What value')).toBeNull();
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('keeps a slot open that is only folded away, past the first rows', async () => {
+    const { rerender } = render(<List rows={[0, 1]} allDrawn />);
+    await open('Fruit and water');
+    // Pushed past the fold: its row isn't drawn, but the slot is still there.
+    rerender(<List rows={[1]} allDrawn={false} />);
+    expect(screen.queryByLabelText('What value')).toBeNull();
+    rerender(<List rows={[0, 1]} allDrawn />);
+    expect(rowButton('Fruit and water')).toHaveAttribute('aria-expanded', 'true');
+    expect(await screen.findByLabelText('What value')).toBeInTheDocument();
   });
 
   // A save can move the slot to another group, as a new date does when the
@@ -327,7 +342,7 @@ describe('<ReviewSlotRow />', () => {
   describe('when the save moves the slot to another group', () => {
     function Grouped({ group }: { group: string }) {
       return (
-        <ReviewSlotEditing signupId="sig_1" fields={FIELDS} id="slots" className="">
+        <ReviewSlotEditing signupId="sig_1" fields={FIELDS} id="slots" className="" allDrawn>
           <details key={group} open={group === 'Sat, Apr 6'}>
             <summary>{group}</summary>
             <ul>

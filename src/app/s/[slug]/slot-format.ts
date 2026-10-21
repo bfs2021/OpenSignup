@@ -1,13 +1,9 @@
 import type { SignupViewField, SignupViewSlot } from './signup-view-types';
 // Single implementation, shared with the emails so a slot reads the same in
 // both places. See src/lib/slot-label.ts.
-import { groupKeyOf, renderFieldValue } from '@/lib/slot-label';
+import { formatGroupLabel, groupKeyOf, renderFieldValue } from '@/lib/slot-label';
 
-export { pickPrimaryField, renderFieldValue } from '@/lib/slot-label';
-
-export function formatGroupLabel(field: SignupViewField, raw: unknown): string {
-  return renderFieldValue(field, raw) ?? `(no ${field.label.toLowerCase()})`;
-}
+export { formatGroupLabel, pickPrimaryField, renderFieldValue } from '@/lib/slot-label';
 
 /**
  * One section of the slot list: every slot sharing a value of the group

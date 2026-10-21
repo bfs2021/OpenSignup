@@ -302,11 +302,7 @@ describe('fixDoneText', () => {
 
 describe('removeDayDoneText', () => {
   it('names the day as its header shows it, and how many slots went with it', () => {
-    expect(removeDayDoneText('Sat, Apr 6', 4, 4)).toBe('Removed Sat, Apr 6 and its 4 slots.');
-    expect(removeDayDoneText('Sat, Apr 6', 1, 1)).toBe('Removed Sat, Apr 6 and its slot.');
-  });
-
-  it('says only some went when one was refused partway', () => {
-    expect(removeDayDoneText('Sat, Apr 6', 2, 4)).toBe('Removed 2 of the 4 slots on Sat, Apr 6.');
+    expect(removeDayDoneText('Sat, Apr 6', 4)).toBe('Removed Sat, Apr 6 and its 4 slots.');
+    expect(removeDayDoneText('Sat, Apr 6', 1)).toBe('Removed Sat, Apr 6 and its slot.');
   });
 });

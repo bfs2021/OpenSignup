@@ -11,13 +11,14 @@ import {
   findNoticeFor,
   fixRequestFor,
   labelProblem,
-  mergeRefusal,
+  draftSlotsRefusal,
   mergeRequestFor,
   planUndo,
   removableDays,
   removeDayRequest,
   removeDayUndo,
   restoredLabel,
+  slotSetFingerprint,
   type DraftState,
 } from './draft-fixes';
 
@@ -217,35 +218,35 @@ describe('mergeRequestFor', () => {
   });
 });
 
-describe('mergeRefusal', () => {
+describe('draftSlotsRefusal', () => {
   const refused = (code: 'conflict' | 'invalid_input' | 'not_found', field?: string) =>
     serviceError(code, 'service words', field !== undefined ? { field, received: 'x' } : {});
   const reasonOf = (e: { details?: Record<string, unknown> }) => e.details?.reason;
 
   it('reads a signup no longer a draft as that, for a merge and an undo', () => {
-    expect(reasonOf(mergeRefusal(refused('conflict', 'status'), 'fix'))).toBe('not_draft');
-    expect(reasonOf(mergeRefusal(refused('conflict', 'status'), 'undo'))).toBe('not_draft');
+    expect(reasonOf(draftSlotsRefusal(refused('conflict', 'status'), 'fix'))).toBe('not_draft');
+    expect(reasonOf(draftSlotsRefusal(refused('conflict', 'status'), 'undo'))).toBe('not_draft');
   });
 
   it('reads as stale only what a change since causes a merge to refuse', () => {
     // A copy closed, booked or no longer a copy; values no longer the shared ones.
     for (const field of ['slotIds', 'values']) {
-      expect(reasonOf(mergeRefusal(refused('conflict', field), 'fix'))).toBe('stale');
+      expect(reasonOf(draftSlotsRefusal(refused('conflict', field), 'fix'))).toBe('stale');
     }
     // A copy deleted since.
-    expect(reasonOf(mergeRefusal(refused('invalid_input', 'slotIds'), 'fix'))).toBe('stale');
+    expect(reasonOf(draftSlotsRefusal(refused('invalid_input', 'slotIds'), 'fix'))).toBe('stale');
   });
 
   it('never reads as stale what no change caused, which would offer the same button again', () => {
     // The input itself, or values the fields refuse.
     for (const field of ['keepSlotId', 'what', undefined]) {
-      expect(mergeRefusal(refused('invalid_input', field), 'fix')).toEqual({
+      expect(draftSlotsRefusal(refused('invalid_input', field), 'fix')).toEqual({
         code: 'invalid_input',
         message: 'service words',
       });
     }
     // A total too big for one slot.
-    expect(mergeRefusal(refused('conflict', 'capacity'), 'fix')).toEqual({
+    expect(draftSlotsRefusal(refused('conflict', 'capacity'), 'fix')).toEqual({
       code: 'invalid_input',
       message: 'service words',
     });
@@ -253,14 +254,14 @@ describe('mergeRefusal', () => {
 
   it('reads an undo’s conflicts as changed, and passes the rest on without their field', () => {
     for (const field of ['keepSlotId', 'capacity']) {
-      expect(reasonOf(mergeRefusal(refused('conflict', field), 'undo'))).toBe('changed');
+      expect(reasonOf(draftSlotsRefusal(refused('conflict', field), 'undo'))).toBe('changed');
     }
     // A value for a field deleted since, and that field could be called "label".
-    expect(mergeRefusal(refused('invalid_input', 'label'), 'undo')).toEqual({
+    expect(draftSlotsRefusal(refused('invalid_input', 'label'), 'undo')).toEqual({
       code: 'invalid_input',
       message: 'service words',
     });
-    expect(mergeRefusal(refused('not_found'), 'undo')).toEqual({
+    expect(draftSlotsRefusal(refused('not_found'), 'undo')).toEqual({
       code: 'not_found',
       message: 'service words',
     });
@@ -268,7 +269,7 @@ describe('mergeRefusal', () => {
 
   it('never passes a slot field’s ref on as the refusal’s field', () => {
     for (const step of ['fix', 'undo'] as const) {
-      expect(mergeRefusal(refused('invalid_input', 'label'), step).field).toBeUndefined();
+      expect(draftSlotsRefusal(refused('invalid_input', 'label'), step).field).toBeUndefined();
     }
   });
 });
@@ -624,10 +625,22 @@ describe('removableDays', () => {
     ],
   });
 
-  it('is each date’s group, as the page lists them, with every slot in it', () => {
+  it('is each date’s group, as the page lists and names them, with every slot in it', () => {
     expect(removableDays(week)).toEqual([
-      { ref: 'date', value: '2030-04-06', label: 'Sat, Apr 6', slotIds: ['a', 'c'] },
-      { ref: 'date', value: '2030-04-13', label: 'Sat, Apr 13', slotIds: ['b'] },
+      {
+        ref: 'date',
+        value: '2030-04-06',
+        label: 'Sat, Apr 6',
+        slotIds: ['a', 'c'],
+        fingerprint: slotSetFingerprint(['a', 'c']),
+      },
+      {
+        ref: 'date',
+        value: '2030-04-13',
+        label: 'Sat, Apr 13',
+        slotIds: ['b'],
+        fingerprint: slotSetFingerprint(['b']),
+      },
     ]);
   });
 
@@ -680,13 +693,30 @@ describe('removableDays', () => {
     expect(removableDays(big).map((d) => d.value)).toEqual(['2030-04-13']);
   });
 
-  it('is what Remove day sends', () => {
+  it('is what Remove day sends: the day and its slots’ fingerprint, never their ids', () => {
     expect(removeDayRequest(removableDays(week)[0]!)).toEqual({
       kind: 'remove_day',
       ref: 'date',
       value: '2030-04-06',
-      slotIds: ['a', 'c'],
+      fingerprint: slotSetFingerprint(['a', 'c']),
     });
+  });
+});
+
+describe('slotSetFingerprint', () => {
+  it('is the same for the same slots in any order, and short', () => {
+    const ids = ['slot_0b', 'slot_0a', 'slot_0c'];
+    expect(slotSetFingerprint(ids)).toBe(slotSetFingerprint([...ids].reverse()));
+    expect(slotSetFingerprint(ids)).toMatch(/^3\.[\w-]{16}$/);
+  });
+
+  it('changes when a slot is added, taken away or swapped', () => {
+    const base = slotSetFingerprint(['a', 'b']);
+    expect(slotSetFingerprint(['a', 'b', 'c'])).not.toBe(base);
+    expect(slotSetFingerprint(['a'])).not.toBe(base);
+    expect(slotSetFingerprint(['a', 'c'])).not.toBe(base);
+    // Joined so that ids can't run into each other.
+    expect(slotSetFingerprint(['ab', 'c'])).not.toBe(slotSetFingerprint(['a', 'bc']));
   });
 });
 
@@ -703,11 +733,11 @@ describe('findDayFor', () => {
     kind: 'remove_day',
     ref: 'date',
     value: '2030-04-06',
-    slotIds: ['c', 'a'],
+    fingerprint: slotSetFingerprint(['c', 'a']),
   };
 
-  it('finds the day with exactly the slots the page showed, in any order', () => {
-    expect(findDayFor(now, request)).toEqual({
+  it('finds the day with exactly the slots the page showed', () => {
+    expect(findDayFor(now, request)).toMatchObject({
       ref: 'date',
       value: '2030-04-06',
       label: 'Sat, Apr 6',
@@ -716,9 +746,12 @@ describe('findDayFor', () => {
   });
 
   it('finds nothing once a slot moved into the day or out of it, or the day is gone', () => {
-    expect(findDayFor(now, { ...request, slotIds: ['a'] })).toBeNull();
-    expect(findDayFor(now, { ...request, slotIds: ['a', 'c', 'b'] })).toBeNull();
+    const moved = state({ ...now, slots: [now.slots[0]!, now.slots[1]!] });
+    expect(findDayFor(moved, request)).toBeNull();
+    const added = state({ ...now, slots: [...now.slots, slot('d', { date: '2030-04-06' })] });
+    expect(findDayFor(added, request)).toBeNull();
     expect(findDayFor(now, { ...request, value: '2030-04-20' })).toBeNull();
+    expect(findDayFor(now, { ...request, fingerprint: slotSetFingerprint(['a']) })).toBeNull();
   });
 
   it('finds nothing on a page grouped another way since, or by another field', () => {
@@ -732,13 +765,18 @@ describe('findDayFor', () => {
       slots: [slot('a', { what: 'Setup' }), slot('b', { what: 'Till', date: '2030-04-13' })],
     });
     expect(
-      findDayFor(undated, { kind: 'remove_day', ref: 'date', value: '__unset__', slotIds: ['a'] }),
+      findDayFor(undated, {
+        kind: 'remove_day',
+        ref: 'date',
+        value: '__unset__',
+        fingerprint: slotSetFingerprint(['a']),
+      }),
     ).toBeNull();
   });
 });
 
 describe('removeDayUndo', () => {
-  it('remembers the slots it took out as they were, in list order, and the day', () => {
+  it('remembers the day’s slots as they were, in list order, and the day', () => {
     const before = state({
       settings: { groupByFieldRefs: ['date'] },
       slots: [
@@ -752,7 +790,7 @@ describe('removeDayUndo', () => {
       ],
     });
     const day = removableDays(before)[0]!;
-    expect(removeDayUndo(day, before, ['a', 'c'])).toEqual({
+    expect(removeDayUndo(day, before)).toEqual({
       kind: 'remove_day',
       ref: 'date',
       value: '2030-04-06',
@@ -765,10 +803,6 @@ describe('removeDayUndo', () => {
           closed: true,
         },
       ],
-    });
-    // Only the slots that went, when one was refused partway.
-    expect(removeDayUndo(day, before, ['a'])).toMatchObject({
-      slots: [{ values: { what: 'Setup', date: '2030-04-06' } }],
     });
   });
 });
@@ -837,7 +871,7 @@ describe('Remove day and its undo', () => {
       ],
     });
     const day = findDayFor(before, removeDayRequest(removableDays(before)[0]!))!;
-    const undo = removeDayUndo(day, before, day.slotIds);
+    const undo = removeDayUndo(day, before);
     const after = state({ settings: before.settings, slots: [before.slots[1]!] });
     expect(planUndo(undo, after)).toEqual({
       kind: 'remove_day',

@@ -8,6 +8,7 @@ import { signups } from '@/db/schema/signups';
 import { slots as slotsTable } from '@/db/schema/slots';
 import { workspaces } from '@/db/schema/workspaces';
 import { getEmailTransport } from '@/email';
+import { slotSetFingerprint } from '@/lib/draft-fixes';
 import { makeId } from '@/lib/ids';
 import type { Actor } from '@/lib/policy';
 import { chargeRateLimit, RateLimits } from '@/lib/rate-limit';
@@ -445,7 +446,11 @@ describe('applyDraftFixAction and undoDraftFixAction (db)', () => {
 
   async function events(
     signupId: string,
-    eventType: 'review.notice_accepted' | 'review.fix_undone' | 'slot.deleted',
+    eventType:
+      | 'review.notice_accepted'
+      | 'review.fix_undone'
+      | 'review.slots_edited'
+      | 'slot.deleted',
   ) {
     const rows = await db
       .select({ payload: activity.payload, actorId: activity.actorId })
@@ -779,6 +784,25 @@ describe('applyDraftFixAction and undoDraftFixAction (db)', () => {
     expect(await events(id, 'review.fix_undone')).toHaveLength(1);
   });
 
+  it('removes empty slots all together, in one transaction logged once', async () => {
+    const scenario = SCENARIOS.blank_slot;
+    const { id, before } = await draftFor(scenario);
+    const applied = await applyDraftFixAction(id, scenario.request(before));
+    expect(applied).toMatchObject({ done: 'Removed 2 empty slots.' });
+    expect(await events(id, 'slot.deleted')).toEqual([
+      {
+        payload: {
+          bulk: true,
+          count: 2,
+          slotIds: [before.ids.slots[1], before.ids.slots[3]],
+          commitmentsRemoved: 0,
+          places: 0,
+        },
+        actorId: organizerId,
+      },
+    ]);
+  });
+
   // Remove day (#504): every slot of one date's group on a page grouped by
   // date, through the same Undo.
   describe('removeDayAction', () => {
@@ -805,13 +829,19 @@ describe('applyDraftFixAction and undoDraftFixAction (db)', () => {
       done: '',
       fixed: () => {},
     };
-    const SAT_APR_6 = [0, 2, 3];
-    const sat = (s: Snapshot): RemoveDayRequest => ({
+    /** What the page sends for the day `value` holding these slots. */
+    const day = (value: string, slotIds: string[], ref = 'date'): RemoveDayRequest => ({
       kind: 'remove_day',
-      ref: 'date',
-      value: '2030-04-06',
-      slotIds: SAT_APR_6.map((i) => s.ids.slots[i]!),
+      ref,
+      value,
+      fingerprint: slotSetFingerprint(slotIds),
     });
+    const SAT_APR_6 = [0, 2, 3];
+    const sat = (s: Snapshot) =>
+      day(
+        '2030-04-06',
+        SAT_APR_6.map((i) => s.ids.slots[i]!),
+      );
     const stale = { error: 'That changed since you opened this page, so nothing was done.' };
     const changedAgain = { error: 'That changed again since, so it can’t be undone.' };
 
@@ -828,8 +858,23 @@ describe('applyDraftFixAction and undoDraftFixAction (db)', () => {
         { what: 'Till', date: '2030-04-13' },
         { what: 'Raffle' },
       ]);
-      // Logged as any deleted slot is, and not as a notice's fix.
-      expect(await events(id, 'slot.deleted')).toHaveLength(3);
+      // One row for the slots, deleted together, and one saying the page
+      // did it; not a notice's fix.
+      expect(await events(id, 'slot.deleted')).toEqual([
+        {
+          payload: {
+            bulk: true,
+            count: 3,
+            slotIds: SAT_APR_6.map((i) => before.ids.slots[i]),
+            commitmentsRemoved: 0,
+            places: 0,
+          },
+          actorId: organizerId,
+        },
+      ]);
+      expect(await events(id, 'review.slots_edited')).toEqual([
+        { payload: { kind: 'remove_day' }, actorId: organizerId },
+      ]);
       expect(await events(id, 'review.notice_accepted')).toHaveLength(0);
 
       // The undo goes to the browser and back as plain data.
@@ -846,12 +891,7 @@ describe('applyDraftFixAction and undoDraftFixAction (db)', () => {
 
     it('says a day of one slot as one', async () => {
       const { id, before } = await draftFor(week);
-      const removed = await removeDayAction(id, {
-        kind: 'remove_day',
-        ref: 'date',
-        value: '2030-04-13',
-        slotIds: [before.ids.slots[1]!],
-      });
+      const removed = await removeDayAction(id, day('2030-04-13', [before.ids.slots[1]!]));
       expect(removed).toMatchObject({ done: 'Removed Sat, Apr 13 and its slot.' });
     });
 
@@ -879,6 +919,7 @@ describe('applyDraftFixAction and undoDraftFixAction (db)', () => {
       expect(await removeDayAction(added.id, sat(added.before))).toEqual(stale);
       expect(await snapshot(added.id)).toEqual(addedNow);
       expect(await events(added.id, 'slot.deleted')).toHaveLength(0);
+      expect(await events(added.id, 'review.slots_edited')).toHaveLength(0);
     });
 
     it('removes nothing a second time', async () => {
@@ -959,12 +1000,7 @@ describe('applyDraftFixAction and undoDraftFixAction (db)', () => {
       if (!regrouped.ok) throw new Error(regrouped.error.message);
       const byWhatNow = await snapshot(byWhat.id);
       expect(
-        await removeDayAction(byWhat.id, {
-          kind: 'remove_day',
-          ref: 'what',
-          value: 'Setup',
-          slotIds: [byWhat.before.ids.slots[0]!],
-        }),
+        await removeDayAction(byWhat.id, day('Setup', [byWhat.before.ids.slots[0]!], 'what')),
       ).toEqual(stale);
       expect(await snapshot(byWhat.id)).toEqual(byWhatNow);
     });
@@ -979,22 +1015,15 @@ describe('applyDraftFixAction and undoDraftFixAction (db)', () => {
         ],
         setup: undefined,
       });
-      expect(
-        await removeDayAction(id, {
-          kind: 'remove_day',
-          ref: 'date',
-          value: '2030-04-06',
-          slotIds: [before.ids.slots[0]!],
-        }),
-      ).toEqual(stale);
+      expect(await removeDayAction(id, day('2030-04-06', [before.ids.slots[0]!]))).toEqual(stale);
       expect(await snapshot(id)).toEqual(before);
     });
 
     it('refuses a request it can’t read, and removes nothing', async () => {
       const { id, before } = await draftFor(week);
-      expect(
-        await removeDayAction(id, { ...sat(before), slotIds: [] } as RemoveDayRequest),
-      ).toEqual({ error: 'Couldn’t remove that day. Try again.' });
+      expect(await removeDayAction(id, { ...sat(before), fingerprint: '' })).toEqual({
+        error: 'Couldn’t remove that day. Try again.',
+      });
       expect(await snapshot(id)).toEqual(before);
     });
   });

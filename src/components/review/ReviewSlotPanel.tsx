@@ -15,8 +15,12 @@ export interface StoredSlot {
   capacity: number | null;
 }
 
-/** Saves the open slot, then opens `next`, or closes it when `next` is null. */
-export type Finish = (next: string | null) => void;
+/**
+ * Saves the open slot, then opens `next`, or closes it when `next` is null.
+ * Answers whether it did: false when the save was refused and the slot stays
+ * open saying why.
+ */
+export type Finish = (next: string | null) => Promise<boolean>;
 
 const NO_CHANGES: SlotDraft = { values: {} };
 
@@ -41,28 +45,42 @@ export function ReviewSlotPanel({ stored, list }: { stored: StoredSlot; list: Sl
   const [added, setAdded] = useState<Record<string, string[]>>({});
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const inFlight = useRef(false);
+  // The save on its way, or made and waiting for the page to come back.
+  const saving = useRef<Promise<boolean> | null>(null);
   const panel = useRef<HTMLDivElement>(null);
-  const busy = sending || list.landingId === stored.id;
+  const landing = list.landingId === stored.id;
+  const busy = sending || landing;
 
-  async function finish(next: string | null): Promise<void> {
-    if (busy || inFlight.current) return;
+  function finish(next: string | null): Promise<boolean> {
+    // Saved already: it closes once the page is back.
+    if (landing) return Promise.resolve(true);
+    // Asked again while saving: the same answer.
+    if (saving.current) return saving.current;
     const choices = newChoices(fields, added);
     const body = slotPatch(stored, draft, fields);
     if (choices.length === 0 && !body) {
       list.closed(next);
-      return;
+      return Promise.resolve(true);
     }
-    inFlight.current = true;
+    saving.current = save(next, choices, body);
+    return saving.current;
+  }
+
+  async function save(
+    next: string | null,
+    choices: ReturnType<typeof newChoices>,
+    body: ReturnType<typeof slotPatch>,
+  ): Promise<boolean> {
     setSending(true);
     setError(null);
     let savedSome = false;
     const refuse = (reason: string) => {
-      inFlight.current = false;
+      saving.current = null;
       setSending(false);
       setError(reason);
       // A list's new choice was saved before the slot was refused.
       if (savedSome) list.refresh();
+      return false;
     };
     // Only `config`, as the builder sends it: if the field's type changed
     // since this page loaded, the server refuses rather than changing it back.
@@ -76,10 +94,11 @@ export function ReviewSlotPanel({ stored, list }: { stored: StoredSlot; list: Sl
       if (refused) return refuse(refused);
     }
     list.saved(stored.id, next);
+    return true;
   }
 
   useEffect(() => {
-    list.finishRef.current = (next) => void finish(next);
+    list.finishRef.current = finish;
     return () => {
       list.finishRef.current = null;
     };

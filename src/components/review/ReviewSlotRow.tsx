@@ -15,6 +15,7 @@ import type { BuildField } from '@/components/build-shared/useBuildState';
 import { FormError } from '@/components/ui/form-error';
 import { SavedNotice } from '@/components/ui/save-notice';
 import { Spinner } from '@/components/ui/spinner';
+import { useBeforeChange } from './ReviewChanges';
 import type { Finish, ReviewSlotPanel, StoredSlot } from './ReviewSlotPanel';
 
 type Panel = typeof ReviewSlotPanel;
@@ -76,14 +77,16 @@ const SlotEditingContext = createContext<SlotEditing | null>(null);
  * button, opening its group if that is folded; if the slot moved past the
  * fold and has no button, focus goes to the list. Choosing another slot while
  * one is open is Done for that one first; the other opens once it has saved,
- * and not if it was refused. A slot that leaves the page while open, as with
- * Remove day, closes without saving.
+ * and not if it was refused. A change made elsewhere on the card (a fix,
+ * Remove day, Undo) is the same: the open slot is saved first, and the change
+ * waits for it, or isn't made if the save was refused (`useBeforeChange`).
  */
 export function ReviewSlotEditing({
   signupId,
   fields,
   id,
   className,
+  allDrawn,
   children,
 }: {
   signupId: string;
@@ -92,18 +95,27 @@ export function ReviewSlotEditing({
   /** The list's own id and classes. */
   id: string;
   className: string;
+  /** Every slot has its row in `children`: none is past the fold. */
+  allDrawn: boolean;
   children: ReactNode;
 }) {
   const router = useRouter();
   const [refreshing, startRefresh] = useTransition();
   const [openId, setOpenId] = useState<string | null>(null);
   const [savedId, setSavedId] = useState<string | null>(null);
-  const [landing, setLanding] = useState<{ slotId: string; next: string | null } | null>(null);
+  const [landing, setLanding] = useState<{
+    slotId: string;
+    next: string | null;
+    /** Its row takes focus once it closes. */
+    refocus: boolean;
+  } | null>(null);
   const [Panel, setPanel] = useState<Panel | null>(null);
   const [loadFailed, setLoadFailed] = useState(false);
   const finishRef = useRef<Finish | null>(null);
   // The slot whose button gets focus back once its editor has closed.
   const refocus = useRef<string | null>(null);
+  // Finishing for a change elsewhere on the card, which says where focus goes.
+  const quiet = useRef(false);
   const list = useRef<HTMLDivElement>(null);
 
   // The refresh has come back. The rows drawn with it already show the slot
@@ -115,18 +127,44 @@ export function ReviewSlotEditing({
     setSavedId(landed.slotId);
     // The editor is loaded: it just saved.
     setOpenId(landed.next);
-    if (!landed.next) refocus.current = landed.slotId;
+    if (!landed.next && landed.refocus) refocus.current = landed.slotId;
   }, [landed]);
 
-  // The open slot's row is gone from the page that came back (`children`),
-  // its day removed say: its editor went with it, so it is closed, not left
-  // open on nothing. Not while a save lands, which can move the row out of
-  // sight first.
+  // The open slot's row is gone from the page that came back (`children`)
+  // while every slot has its row: the slot itself is gone, deleted in another
+  // tab say, so its editor is closed rather than left open on nothing. With
+  // rows past the fold, a missing row may only be folded away, its slot still
+  // there, so it stays open for when its row is back. Not while a save lands,
+  // which can move the row out of sight first.
   useEffect(() => {
-    if (openId !== null && landing === null && !document.getElementById(rowButtonId(openId))) {
+    if (
+      allDrawn &&
+      openId !== null &&
+      landing === null &&
+      !document.getElementById(rowButtonId(openId))
+    ) {
       setOpenId(null);
     }
-  }, [openId, landing, children]);
+  }, [allDrawn, openId, landing, children]);
+
+  useBeforeChange(async () => {
+    if (landing) {
+      // Saved already, and closing once the page is back.
+      setLanding((l) => l && { ...l, refocus: false });
+      return true;
+    }
+    if (openId === null) return true;
+    quiet.current = true;
+    const finish = finishRef.current;
+    try {
+      if (finish) return await finish(null);
+      // Still loading, or its load failed: nothing was typed in it.
+      closed(null);
+      return true;
+    } finally {
+      quiet.current = false;
+    }
+  });
 
   useEffect(() => {
     if (openId !== null || refocus.current === null) return;
@@ -161,7 +199,7 @@ export function ReviewSlotEditing({
       show(next);
       return;
     }
-    refocus.current = openId;
+    if (!quiet.current) refocus.current = openId;
     setOpenId(null);
   }
 
@@ -169,7 +207,7 @@ export function ReviewSlotEditing({
     if (landing) return;
     if (openId === null) show(slotId);
     // The open editor finishes first: it saves, or refuses and stays open.
-    else if (finishRef.current) finishRef.current(slotId === openId ? null : slotId);
+    else if (finishRef.current) void finishRef.current(slotId === openId ? null : slotId);
     else if (slotId !== openId) show(slotId);
     // Still loading: choosing it again tries a failed load again, or closes it.
     else if (loadFailed) prefetch();
@@ -193,7 +231,7 @@ export function ReviewSlotEditing({
         prefetch,
         closed,
         saved: (slotId, next) => {
-          setLanding({ slotId, next });
+          setLanding({ slotId, next, refocus: !quiet.current });
           refresh();
         },
         refresh,

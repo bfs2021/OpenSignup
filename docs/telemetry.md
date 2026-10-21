@@ -59,7 +59,8 @@ by `clientDomain` instead.
 | `signup.link_shared` | organizer | `{ surface: 'share_step', status }` (the share step's Share…, which opens the phone's own share sheet with the link; shown only where the browser has one). Written once the sheet reports it sent; closing the sheet without sending writes nothing. Which app it went to is never known | client beacon, via `POST /api/signups/[id]/link-events?event=shared&surface=share_step`, metered with the copies |
 | `review.notice_shown` | organizer | `{ kind }`: one row per kind of problem the review page found on a draft and showed, each time the page renders (`placeholder`, `empty_field`, `blank_slot`, `duplicate_slots`, `unnamed_field`, `ungrouped_dates`, `time_in_text`; `DRAFT_CHECK_KINDS` in `src/lib/draft-checks.ts`). Never the values. A refresh writes them again, and every save made on the page refreshes it (a slot's Done, a card's Save, a one-tap fix, Remove day and their Undo), which writes `signup.editor_opened` with `section: 'review'` again too. So compare kinds, and count opens of the page, by distinct `signup_id` | RSC at `/app/signups/[id]`, in one insert after the page is sent |
 | `review.notice_accepted` | organizer | `{ kind }`: one row each time the organizer takes a notice's one-tap fix on the review page and it's made (`empty_field`, `blank_slot`, `unnamed_field`, `ungrouped_dates`, and `duplicate_slots` for copies merged into one; `DraftFixKind` in `src/schemas/draft-fixes.ts`). Never the values or a field's new name. Compare with `review.notice_shown` by kind. The fix itself is logged by the service that makes it, as any other change is (`field.deleted`, `slot.deleted`, `field.updated`, `signup.updated`, `slot.merged`). A fix refused (a viewer, a signup no longer a draft, a problem already gone) writes nothing | `services/draft-fixes.ts` (`applyDraftFix`), from the review page's server action, after the fix |
-| `review.fix_undone` | organizer | `{ kind }`: the organizer chose Undo on the last fix and it was put back, through the same services (`field.created`, `slot.created`, `slot.updated` for a slot closed again, `field.updated`, `signup.updated`, `slot.unmerged`): a fix they didn't want. `kind` is the fix's, or `remove_day` for Undo on the review page's Remove day, which put a date's slots back (`slot.created`, and `slot.updated` for one closed again). Remove day itself writes no `review.*` row: one `slot.deleted` per slot records it. An undo refused because the signup changed since writes nothing | `services/draft-fixes.ts` (`undoDraftFix`), from the review page's server action, after the undo |
+| `review.fix_undone` | organizer | `{ kind }`: the organizer chose Undo on the last fix and it was put back, through the same services (`field.created`, `slot.created`, `slot.updated` for a slot closed again, `field.updated`, `signup.updated`, `slot.unmerged`): a fix they didn't want. `kind` is the fix's, or `remove_day` for Undo on the review page's Remove day (`review.slots_edited`), which put a date's slots back (`slot.created`, and `slot.updated` for one closed again). An undo refused because the signup changed since writes nothing | `services/draft-fixes.ts` (`undoDraftFix`), from the review page's server action, after the undo |
+| `review.slots_edited` | organizer | `{ kind }`: one row each time the organizer changes the slots from the review page in a way that isn't one of its notices' fixes, and it's made: `remove_day` for Remove day, which deleted every slot of one date's group (logged too as one bulk `slot.deleted`). Never the values or the date. Its Undo writes `review.fix_undone` with the same kind. Refused (a viewer, a signup no longer a draft, a day changed since) writes nothing | `services/draft-fixes.ts` (`removeDraftDay`), from the review page's server action, after the change |
 | `magic_compose.failed` | organizer | `{ code }`: the AI client's `not_configured` \| `rate_limited` \| `upstream` \| `invalid_json` \| `schema_mismatch` \| `timeout` \| `aborted`; `schema_mismatch` too for a draft of the wrong shape; `refusal` when the model declined; `not_saved` when the draft couldn't be saved; `over_limit` when the organizer had used up this instance's Magic Compose quota for the hour. Never the prompt or the model's words | `POST /api/signups/magic-compose`. `signup_id` is `NULL`: no signup was made |
 
 `device` is `'phone'`, `'computer'` or `'unknown'`, from the browser's
@@ -71,10 +72,11 @@ phone can be told apart from ones abandoned at a desk; public views carry
 the device.
 
 `signup.publish_refused`, `signup.link_copied`, `signup.link_shared`,
-`magic_compose.failed`, `review.notice_shown`, `review.notice_accepted` and
-`review.fix_undone` describe no change of their own (a fix and its undo are
-logged by the services that make them), so each is written on its own,
-outside any transaction, and a failed write never fails the request.
+`magic_compose.failed`, `review.notice_shown`, `review.notice_accepted`,
+`review.fix_undone` and `review.slots_edited` describe no change of their
+own (a fix, Remove day and their undo are logged by the services that make
+them), so each is written on its own, outside any transaction, and a failed
+write never fails the request.
 
 ### Slot / field lifecycle
 
@@ -83,7 +85,7 @@ outside any transaction, and a failed write never fails the request.
 | `slot.created` | organizer | `{ slotId }` from `addSlot`; `{ count, bulk: true, slotIds, beforeSlotId? }` from `addSlotsBulk` (the bulk endpoint and the `add_slots` tool), one row per call | `services/slots.ts` |
 | `slot.updated` | organizer | `{ slotId, changed }` (the keys the update sent). A slot changed on the review page goes through the same route as one changed in the Build tab, so the payload doesn't say which page it came from | `services/slots.ts` |
 | `slot.reordered` | organizer | `{ slotIds }` (every slot, in the new order; written even when the order did not change) | `services/slots.ts` (`reorderSlots`, from the `reorder_slots` tool; a drag in the Build tab writes a `slot.updated` per moved slot instead) |
-| `slot.deleted` | organizer | `{ slotId, commitmentsRemoved, places }` (the sign-ups deleted with it, as commitments and as places) | `services/slots.ts` |
+| `slot.deleted` | organizer | `{ slotId, commitmentsRemoved, places }` (the sign-ups deleted with it, as commitments and as places) from `deleteSlot`; `{ bulk: true, count, slotIds, commitmentsRemoved: 0, places: 0 }` from `deleteDraftSlots`, one row for several of a draft's slots deleted together (the review page's Remove day and its Remove it / Remove them), never one anyone has signed up for | `services/slots.ts` |
 | `slot.merged` | organizer | `{ slotId, mergedSlotIds, capacity }`: copies of a slot on a draft made into one, the review page's fix for identical rows. `slotId` is the slot kept, `mergedSlotIds` the ones deleted, and `capacity` the kept slot's new capacity, their total (`null` when any had no limit). Drafts only, and never a slot anyone has signed up for | `services/slot-merge.ts` (`mergeSlots`) |
 | `slot.unmerged` | organizer | `{ slotId, restoredSlotIds, capacity }`: a merge undone. `slotId` is the slot that was kept, `restoredSlotIds` the new ids of the slots put back, and `capacity` the kept slot's capacity from before the merge | `services/slot-merge.ts` (`unmergeSlots`) |
 | `commitment.removed` | organizer | `{ commitmentId, participantId, slotId }` (an organizer took the person off their slot on the Responses tab; nobody is emailed) | `services/commitments.ts` (`removeCommitment`) |
@@ -424,10 +426,11 @@ edits, `auth.signed_in`, **and** the organizer-side RSC pageview events
 Build tab's `signup.viewed`) which are written with the organizer as actor,
 and the organizer's telemetry rows (`signup.publish_refused`,
 `signup.link_copied`, `signup.link_shared`, `magic_compose.failed`,
-`review.notice_shown`, `review.notice_accepted`, `review.fix_undone`). So do a
-requested `draft.nudge_sent` and the `draft_email.*` opt-out rows, which are
-written from the email's link without a sign-in; the scheduled
-`draft.nudge_sent` is system-actor and does not.
+`review.notice_shown`, `review.notice_accepted`, `review.fix_undone`,
+`review.slots_edited`). So do a requested `draft.nudge_sent` and the
+`draft_email.*` opt-out rows, which are written from the email's link
+without a sign-in; the scheduled `draft.nudge_sent` is system-actor and does
+not.
 The public page's `signup.viewed` is system-actor and does not advance
 `last_active_at`.
 
