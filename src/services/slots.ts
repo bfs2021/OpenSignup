@@ -1,4 +1,4 @@
-import { and, eq, or, sql, type Column } from 'drizzle-orm';
+import { and, eq, getTableColumns, or, sql, type Column } from 'drizzle-orm';
 import type { Db, Queryable, Tx } from '@/db/client';
 import { commitments } from '@/db/schema/commitments';
 import { slots } from '@/db/schema/slots';
@@ -12,6 +12,7 @@ import { toSlug } from '@/lib/slug';
 import {
   type SlotUpdateInput,
   SlotBulkInputSchema,
+  SlotCapacitiesInputSchema,
   SlotCreateInputSchema,
   SlotDeleteDraftInputSchema,
   SlotReorderInputSchema,
@@ -444,6 +445,149 @@ export async function updateSlot(
       payload: { slotId, changed: Object.keys(data) },
     });
     return ok(row);
+  });
+}
+
+/** A slot's capacity, null for no limit: what `updateSlotCapacities` takes for each slot. */
+interface SlotCapacity {
+  id: string;
+  capacity: number | null;
+}
+
+/**
+ * Set the capacity of several slots of one signup at once, in one
+ * transaction: "People for each slot" on the review page (issue #504). Each
+ * entry names a slot of the signup and its new capacity, null for no limit.
+ * An entry whose capacity is already the stored one is left alone, and when
+ * none changes nothing is written and no activity is recorded.
+ *
+ * Not drafts only, though the review page offers it only on one. On a signup
+ * people have signed up for, a capacity below the places a slot already has
+ * taken is refused as `updateSlot` refuses it, naming the first such slot in
+ * the order sent, and nothing changes. Any other change writes one
+ * `slot.updated` row naming the slots that changed.
+ *
+ * Returns the slots sent, as they now stand, in the order they are shown;
+ * and `previous`, the capacity each changed slot had before, which sent back
+ * as `slots` puts them back.
+ */
+export async function updateSlotCapacities(
+  db: Db,
+  actor: Actor,
+  signupId: string,
+  rawInput: unknown,
+): Promise<Result<{ slots: SlotRow[]; previous: SlotCapacity[] }, ServiceError>> {
+  const input = parseInputSafe(SlotCapacitiesInputSchema, rawInput);
+  if (!input.ok) return input;
+  const wanted: SlotCapacity[] = input.value.slots;
+
+  const signupRow = await readLiveSignup(db, signupId);
+  if (!signupRow) return err(serviceError('not_found', 'signup not found'));
+  requireWorkspaceWrite(actor, signupRow.workspaceId);
+  const { workspaceId } = signupRow;
+
+  return db.transaction(async (tx) => {
+    // The signup row, then its slots, as `reorderSlots` takes them. The signup
+    // lock keeps adds, edits and reorders out. The slot rows are the ones
+    // `commitToSlot` and `deleteSlot` lock, so a sign-up or a delete in flight
+    // finishes first, and no place can be taken between the count below and
+    // the write. Undefined for a soft delete that committed while this
+    // waited, too.
+    const locked = await lockSignupForWrite(tx, signupId, workspaceId);
+    if (!locked) return err(serviceError('not_found', 'signup not found'));
+    const current = await lockSlotsForSignup(tx, signupId, workspaceId);
+    const byId = new Map(current.map((s) => [s.id, s]));
+
+    // Checked against the rows as locked, so a slot deleted or merged in
+    // another tab since the page was drawn is refused rather than skipped.
+    const unknown = wanted.filter((w) => !byId.has(w.id)).map((w) => w.id);
+    if (unknown.length > 0) {
+      return err(
+        serviceError('invalid_input', `slot ${unknown[0]} is not a slot of this signup`, {
+          field: 'slots',
+          received: unknown[0],
+          details: { unknown },
+          suggestion: 'reload the signup: a slot may have been deleted or merged since',
+        }),
+      );
+    }
+
+    const changed = wanted.filter((w) => byId.get(w.id)!.capacity !== w.capacity);
+    const sent = new Set(wanted.map((w) => w.id));
+    const named = current.filter((s) => sent.has(s.id));
+    if (changed.length === 0) return ok({ slots: named, previous: [] });
+
+    // The places each slot has taken, counted as `updateSlot` counts them:
+    // confirmed and tentative, by quantity. A waitlisted place is not one.
+    // No limit is never too few, so with only those there is nothing to count.
+    if (changed.some((w) => w.capacity !== null)) {
+      const rows = await tx
+        .select({
+          slotId: commitments.slotId,
+          used: sql<number>`coalesce(sum(${commitments.quantity}), 0)::int`,
+        })
+        .from(commitments)
+        .where(
+          and(
+            eq(commitments.signupId, signupId),
+            inWorkspace(commitments.workspaceId, workspaceId),
+            or(eq(commitments.status, 'confirmed'), eq(commitments.status, 'tentative')),
+          ),
+        )
+        .groupBy(commitments.slotId);
+      const taken = new Map(rows.map((r) => [r.slotId, r.used]));
+      for (const { id, capacity } of changed) {
+        const used = taken.get(id) ?? 0;
+        if (capacity !== null && used > capacity) {
+          return err(
+            serviceError(
+              'conflict',
+              `slot ${id}: capacity (${capacity}) is less than active quantity (${used})`,
+              {
+                field: 'capacity',
+                received: capacity,
+                details: { slotId: id, taken: used },
+                suggestion: 'cancel some commitments before lowering capacity',
+              },
+            ),
+          );
+        }
+      }
+    }
+
+    // One statement for every slot that changes: the new capacities travel as
+    // one JSON parameter, as the ids do in `writeSlotOrder`.
+    const capacities = sql`jsonb_to_recordset(${JSON.stringify(changed)}::jsonb)
+      as wanted(id text, capacity int)`;
+    const updated = await tx
+      .update(slots)
+      .set({ capacity: sql`wanted.capacity`, updatedAt: new Date() })
+      .from(capacities)
+      .where(
+        and(
+          eq(slots.signupId, signupId),
+          inWorkspace(slots.workspaceId, workspaceId),
+          sql`${slots.id} = wanted.id`,
+        ),
+      )
+      .returning(getTableColumns(slots));
+    if (updated.length !== changed.length) {
+      throw new Error('slot capacities: a slot was not updated under its lock');
+    }
+
+    await recordActivity(tx, {
+      signupId,
+      workspaceId,
+      actor: activityActor(actor),
+      eventType: 'slot.updated',
+      payload: { bulk: true, slotIds: changed.map((w) => w.id), changed: ['capacity'] },
+    });
+
+    const after = new Map(updated.map((s) => [s.id, s]));
+    return ok({
+      slots: named.map((s) => after.get(s.id) ?? s),
+      previous: changed.map(({ id }) => ({ id, capacity: byId.get(id)!.capacity })),
+    });
   });
 }
 

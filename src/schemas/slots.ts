@@ -72,6 +72,34 @@ export const MAX_MERGE_SLOTS = 500;
 const CapacitySchema = z.number().int().positive().nullable();
 
 /**
+ * A new capacity for each of several slots of one signup, set in one go
+ * (issue #504, "People for each slot"): a positive whole number, or null for
+ * no limit, as `SlotUpdateInputSchema` takes one. Each slot at most once, and
+ * at most as many as one bulk add makes.
+ */
+export const SlotCapacitiesInputSchema = z
+  .object({
+    slots: z
+      .array(z.object({ id: z.string().min(1), capacity: CapacitySchema }).strict())
+      .min(1)
+      .max(SLOTS_PER_BULK_ADD),
+  })
+  .strict()
+  .superRefine((input, ctx) => {
+    const seen = new Set<string>();
+    for (const [index, { id }] of input.slots.entries()) {
+      if (seen.has(id)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['slots', index, 'id'],
+          message: `slot ${id} is listed more than once`,
+        });
+      }
+      seen.add(id);
+    }
+  });
+
+/**
  * Merge copies of a slot into one (issue #503): `keepSlotId` stays and takes
  * the copies' total capacity, and every other slot in `slotIds` is deleted.
  * `values`, when sent, replaces the kept slot's values, for numbered rows
