@@ -1,7 +1,7 @@
 import { and, asc, eq, sql } from 'drizzle-orm';
 import type { Db, Queryable, Tx } from '@/db/client';
 import { signups } from '@/db/schema/signups';
-import { slotFields } from '@/db/schema/slot-fields';
+import { slotFields, type SlotField as FieldRow } from '@/db/schema/slot-fields';
 import { slots } from '@/db/schema/slots';
 import { activityActor, recordActivity } from '@/lib/activity';
 import { serviceError, type ServiceError } from '@/lib/errors';
@@ -33,8 +33,6 @@ import {
   SlotFieldUpdateInputSchema,
 } from '@/schemas/slot-fields';
 import { lockSignupForWrite, lockSlotsForSignup, readLiveSignup } from './locks';
-
-type FieldRow = typeof slotFields.$inferSelect;
 
 // The pure resolution rules live in src/lib/reminder-fields.ts so the build
 // page can share them; re-exported here for the callers that already import

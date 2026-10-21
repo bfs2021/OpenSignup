@@ -34,4 +34,3 @@ export const slotFields = pgTable(
 );
 
 export type SlotField = typeof slotFields.$inferSelect;
-export type NewSlotField = typeof slotFields.$inferInsert;

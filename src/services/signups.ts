@@ -1,6 +1,6 @@
 import { and, desc, eq, isNull } from 'drizzle-orm';
 import type { Db } from '@/db/client';
-import { signups } from '@/db/schema/signups';
+import { signups, type Signup as SignupRow } from '@/db/schema/signups';
 import { slotFields } from '@/db/schema/slot-fields';
 import { slots } from '@/db/schema/slots';
 import { activityActor, recordActivity } from '@/lib/activity';
@@ -38,8 +38,6 @@ interface ReminderSettingsLike {
   reminderFromFieldRef?: string | undefined;
   [k: string]: unknown;
 }
-
-type SignupRow = typeof signups.$inferSelect;
 
 function isObject(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);

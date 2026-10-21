@@ -43,4 +43,3 @@ export const signups = pgTable(
 );
 
 export type Signup = typeof signups.$inferSelect;
-export type NewSignup = typeof signups.$inferInsert;
