@@ -1,7 +1,6 @@
 'use client';
 
-import { useState, type FormEvent } from 'react';
-import { useRouter } from 'next/navigation';
+import type { FormEvent } from 'react';
 import { FormError } from '@/components/ui/form-error';
 import { SavedNotice } from '@/components/ui/save-notice';
 import {
@@ -10,7 +9,7 @@ import {
   ReviewCard,
   SAVE_BUTTON_CLASS,
 } from './ReviewCard';
-import { patchSignup } from './patch-signup';
+import { useReviewSave } from './useReviewSave';
 
 /**
  * The review page's "What happens when someone signs up" card: whether the
@@ -35,47 +34,30 @@ export function ReviewSignUpCard({
   /** When a reminder goes out, such as "the day before". */
   before: string;
 }) {
-  const router = useRouter();
-  const [editing, setEditing] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const [saved, setSaved] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const form = useReviewSave(signupId);
 
-  async function onSubmit(e: FormEvent<HTMLFormElement>) {
+  function onSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
-    const form = new FormData(e.currentTarget);
-    setSaving(true);
-    setError(null);
+    const data = new FormData(e.currentTarget);
     // Only what this form shows: `updateSignup` merges it over the rest.
     const settings: Record<string, boolean> = {
-      requireEmail: form.get('requireEmail') !== 'optional',
+      requireEmail: data.get('requireEmail') !== 'optional',
     };
-    if (hasDates) settings.sendReminders = form.get('sendReminders') === 'on';
-    const refused = await patchSignup(signupId, { settings });
-    setSaving(false);
-    if (refused) {
-      setError(refused);
-      return;
-    }
-    setEditing(false);
-    setSaved(true);
-    router.refresh();
+    if (hasDates) settings.sendReminders = data.get('sendReminders') === 'on';
+    void form.save({ settings });
   }
 
   return (
     <ReviewCard
       heading="What happens when someone signs up"
       headingId="review-sign-up"
-      editing={editing}
-      aside={saved && !editing ? <SavedNotice role="status" /> : null}
+      editing={form.editing}
+      aside={form.saved ? <SavedNotice role="status" /> : null}
       action={
-        editing ? null : (
+        form.editing ? null : (
           <button
             type="button"
-            onClick={() => {
-              setEditing(true);
-              setSaved(false);
-            }}
+            onClick={form.open}
             className={CHANGE_BUTTON_CLASS}
             aria-label="Change what happens when someone signs up"
           >
@@ -85,7 +67,7 @@ export function ReviewSignUpCard({
       }
     >
       <p className="text-sm leading-relaxed">{summary}</p>
-      {editing ? (
+      {form.editing ? (
         <form onSubmit={onSubmit} className="flex flex-col gap-3.5 pt-1.5">
           <fieldset className="flex flex-col gap-1">
             <legend className="mb-1.5 text-[13px] font-semibold">Ask for an email address</legend>
@@ -121,19 +103,12 @@ export function ReviewSignUpCard({
               Send a reminder {before} each slot
             </label>
           ) : null}
-          {error ? <FormError>{error}</FormError> : null}
+          {form.error ? <FormError>{form.error}</FormError> : null}
           <div className="flex flex-wrap gap-2">
-            <button type="submit" disabled={saving} className={SAVE_BUTTON_CLASS}>
-              {saving ? 'Saving…' : 'Save'}
+            <button type="submit" disabled={form.busy} className={SAVE_BUTTON_CLASS}>
+              {form.busy ? 'Saving…' : 'Save'}
             </button>
-            <button
-              type="button"
-              onClick={() => {
-                setEditing(false);
-                setError(null);
-              }}
-              className={CANCEL_BUTTON_CLASS}
-            >
+            <button type="button" onClick={form.cancel} className={CANCEL_BUTTON_CLASS}>
               Cancel
             </button>
           </div>

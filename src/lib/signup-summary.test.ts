@@ -2,9 +2,11 @@ import { describe, expect, it } from 'vitest';
 import { renderFieldValue } from '@/lib/slot-label';
 import {
   foldPlan,
+  groupByRef,
   hasFilledSlot,
   peopleLabel,
   sharedValues,
+  reminderReach,
   signupHeadline,
   whatHappensOnSignUp,
   type SignupSummaryInput,
@@ -365,23 +367,59 @@ describe('hasFilledSlot', () => {
   });
 });
 
+describe('reminderReach', () => {
+  const now = Date.parse('2030-04-01T00:00:00Z');
+  const ahead = { slotAt: new Date('2030-04-06T12:00:00Z') };
+  const past = { slotAt: new Date('2030-03-01T12:00:00Z') };
+  const undated = { slotAt: null };
+
+  it('is none when reminders are off, whatever the dates', () => {
+    expect(reminderReach(false, [ahead, ahead], now)).toBe('none');
+  });
+
+  it('is all only when every slot has a date still ahead', () => {
+    expect(reminderReach(true, [ahead, ahead], now)).toBe('all');
+    expect(reminderReach(true, [ahead, undated], now)).toBe('some');
+    expect(reminderReach(true, [ahead, past], now)).toBe('some');
+  });
+
+  it('is none when no slot has a date ahead, or there are no slots', () => {
+    expect(reminderReach(true, [past, undated], now)).toBe('none');
+    expect(reminderReach(true, [], now)).toBe('none');
+  });
+});
+
+describe('groupByRef', () => {
+  it('reads the first group-by ref, and nothing from a malformed setting', () => {
+    expect(groupByRef({ groupByFieldRefs: ['date'] })).toBe('date');
+    expect(groupByRef({ groupByFieldRefs: 'date' })).toBeNull();
+    expect(groupByRef(null)).toBeNull();
+  });
+});
+
 describe('whatHappensOnSignUp', () => {
   const before = 'the day before';
 
-  it('promises a reminder only when one will go out', () => {
-    expect(whatHappensOnSignUp({ requireEmail: true, reminders: true, before })).toBe(
+  it('promises a reminder only where one will go out', () => {
+    expect(whatHappensOnSignUp({ requireEmail: true, reminders: 'all', before })).toBe(
       'They give their name and email, and get a confirmation email now and a reminder the day before their slot.',
     );
-    expect(whatHappensOnSignUp({ requireEmail: true, reminders: false, before })).toBe(
+    expect(whatHappensOnSignUp({ requireEmail: true, reminders: 'some', before })).toBe(
+      'They give their name and email, and get a confirmation email now, and a reminder the day before if their slot has a date.',
+    );
+    expect(whatHappensOnSignUp({ requireEmail: true, reminders: 'none', before })).toBe(
       'They give their name and email, and get a confirmation email. No reminder emails.',
     );
   });
 
   it('says email is optional, and who gets emails then', () => {
-    expect(whatHappensOnSignUp({ requireEmail: false, reminders: true, before })).toBe(
+    expect(whatHappensOnSignUp({ requireEmail: false, reminders: 'all', before })).toBe(
       'They give their name. Email is optional: people who add one get a confirmation, and a reminder the day before their slot.',
     );
-    expect(whatHappensOnSignUp({ requireEmail: false, reminders: false, before })).toBe(
+    expect(whatHappensOnSignUp({ requireEmail: false, reminders: 'some', before })).toBe(
+      'They give their name. Email is optional: people who add one get a confirmation, and a reminder the day before if their slot has a date.',
+    );
+    expect(whatHappensOnSignUp({ requireEmail: false, reminders: 'none', before })).toBe(
       'They give their name. Email is optional: people who add one get a confirmation. No reminder emails.',
     );
   });

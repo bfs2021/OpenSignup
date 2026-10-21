@@ -1,5 +1,5 @@
 import { getDb } from '@/db/client';
-import { getOrganizerSession, requireOrganizerSession, toActor } from '@/auth/session';
+import { requireOrganizerSession, toActor } from '@/auth/session';
 import { loadSignupForOrganizer } from '@/services/signups.cached';
 import { countActiveCommitmentsForSignup } from '@/services/commitments';
 import { publicSignupUrl } from '@/lib/links';
@@ -10,20 +10,14 @@ import { PublishedBanner } from '@/components/signup/PublishedBanner';
 import { SignupLoadError } from '@/components/signup/SignupLoadError';
 import type { SignupStatus } from '@/schemas/signups';
 import { closeAction, publishAction } from '../actions';
+import { signupMetadata } from '../signup-metadata';
 
 type LayoutProps = {
   children: React.ReactNode;
   params: Promise<{ id: string }>;
 };
 
-export async function generateMetadata({ params }: { params: Promise<{ id: string }> }) {
-  const { id } = await params;
-  const session = await getOrganizerSession();
-  if (!session) return { title: 'OpenSignup' };
-  const result = await loadSignupForOrganizer(toActor(session), id);
-  if (!result.ok) return { title: 'OpenSignup' };
-  return { title: result.value.title };
-}
+export const generateMetadata = signupMetadata;
 
 export default async function SignupDetailLayout({ children, params }: LayoutProps) {
   const { id } = await params;

@@ -1,7 +1,6 @@
 'use client';
 
-import { useState, type FormEvent } from 'react';
-import { useRouter } from 'next/navigation';
+import type { FormEvent } from 'react';
 import { FormError } from '@/components/ui/form-error';
 import { SavedNotice } from '@/components/ui/save-notice';
 import {
@@ -10,7 +9,7 @@ import {
   ReviewCard,
   SAVE_BUTTON_CLASS,
 } from './ReviewCard';
-import { patchSignup } from './patch-signup';
+import { useReviewSave } from './useReviewSave';
 
 const INPUT_CLASS =
   'w-full rounded-lg border border-surface-sunk bg-white px-3 text-[15px] text-ink focus:border-brand focus:ring-1 focus:ring-brand focus:outline-none';
@@ -28,45 +27,34 @@ export function ReviewDetailsCard({
   /** The schema's lengths, passed in so this island doesn't load the schema. */
   limits: { titleMin: number; titleMax: number; descriptionMax: number };
 }) {
-  const router = useRouter();
-  const [editing, setEditing] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const [saved, setSaved] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const form = useReviewSave(signupId);
 
-  async function onSubmit(e: FormEvent<HTMLFormElement>) {
+  function onSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
-    const form = new FormData(e.currentTarget);
-    setSaving(true);
-    setError(null);
-    const refused = await patchSignup(signupId, {
-      title: String(form.get('title') ?? '').trim(),
-      description: String(form.get('description') ?? '').trim(),
-    });
-    setSaving(false);
-    if (refused) {
-      setError(refused);
+    const data = new FormData(e.currentTarget);
+    const nextTitle = String(data.get('title') ?? '').trim();
+    // The browser checks the length before trimming; the server, after.
+    if (nextTitle.length < limits.titleMin) {
+      form.refuse(`The name needs at least ${limits.titleMin} letters.`);
       return;
     }
-    setEditing(false);
-    setSaved(true);
-    router.refresh();
+    void form.save({
+      title: nextTitle,
+      description: String(data.get('description') ?? '').trim(),
+    });
   }
 
   return (
     <ReviewCard
       heading="Name and description"
       headingId="review-details"
-      editing={editing}
-      aside={saved && !editing ? <SavedNotice role="status" /> : null}
+      editing={form.editing}
+      aside={form.saved ? <SavedNotice role="status" /> : null}
       action={
-        editing ? null : (
+        form.editing ? null : (
           <button
             type="button"
-            onClick={() => {
-              setEditing(true);
-              setSaved(false);
-            }}
+            onClick={form.open}
             className={CHANGE_BUTTON_CLASS}
             aria-label="Change name and description"
           >
@@ -75,7 +63,7 @@ export function ReviewDetailsCard({
         )
       }
     >
-      {editing ? (
+      {form.editing ? (
         <form onSubmit={onSubmit} className="flex flex-col gap-3.5 pt-1">
           <label className="flex flex-col gap-1.5">
             <span className="text-[13px] font-semibold">Name</span>
@@ -99,19 +87,12 @@ export function ReviewDetailsCard({
               className={`${INPUT_CLASS} py-2.5 text-sm leading-relaxed`}
             />
           </label>
-          {error ? <FormError>{error}</FormError> : null}
+          {form.error ? <FormError>{form.error}</FormError> : null}
           <div className="flex flex-wrap gap-2">
-            <button type="submit" disabled={saving} className={SAVE_BUTTON_CLASS}>
-              {saving ? 'Saving…' : 'Save'}
+            <button type="submit" disabled={form.busy} className={SAVE_BUTTON_CLASS}>
+              {form.busy ? 'Saving…' : 'Save'}
             </button>
-            <button
-              type="button"
-              onClick={() => {
-                setEditing(false);
-                setError(null);
-              }}
-              className={CANCEL_BUTTON_CLASS}
-            >
+            <button type="button" onClick={form.cancel} className={CANCEL_BUTTON_CLASS}>
               Cancel
             </button>
           </div>

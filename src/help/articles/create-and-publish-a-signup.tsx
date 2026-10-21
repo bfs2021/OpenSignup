@@ -6,8 +6,6 @@ import { UI } from './create-and-publish-a-signup.ui';
 
 export { UI };
 
-// Said the way the builder says it next to the date field.
-const REMINDER_WHEN = REMINDER_BEFORE;
 // A sign-up newer than this isn't picked up yet (src/jobs/reminders.ts).
 const SETTLE = REMINDER_SETTLE_HOURS === 1 ? 'an hour' : `${REMINDER_SETTLE_HOURS} hours`;
 
@@ -226,7 +224,7 @@ export function CreateAndPublishASignup() {
         <p>
           If a slot has a date, people who take it and gave an email address get a reminder
           email{' '}
-          {REMINDER_WHEN}. Someone who signs up later than that gets one about {SETTLE} after
+          {REMINDER_BEFORE}. Someone who signs up later than that gets one about {SETTLE} after
           signing up, unless the slot is less than {SETTLE} away. Each reminder has a link to stop
           them.
         </p>

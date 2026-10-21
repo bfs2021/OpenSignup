@@ -1,18 +1,17 @@
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
-import { getOrganizerSession, requireOrganizerSession, toActor } from '@/auth/session';
+import { requireOrganizerSession, toActor } from '@/auth/session';
 import { ReviewDetailsCard } from '@/components/review/ReviewDetailsCard';
 import { ReviewSignUpCard } from '@/components/review/ReviewSignUpCard';
 import { ReviewSlotsCard } from '@/components/review/ReviewSlotsCard';
 import { SignupLoadError } from '@/components/signup/SignupLoadError';
 import { StatusPill } from '@/components/status-pill';
 import { AsyncSubmitButton } from '@/components/ui/async-submit-button';
-import { hasFilledSlot, whatHappensOnSignUp } from '@/lib/signup-summary';
+import { hasFilledSlot, reminderReach, whatHappensOnSignUp } from '@/lib/signup-summary';
 import { trackOrganizerView } from '@/lib/view-tracker';
 import {
   DESCRIPTION_MAX_LENGTH,
   REMINDER_BEFORE,
-  SignupSettingsSchema,
   TITLE_MAX_LENGTH,
   TITLE_MIN_LENGTH,
   requiresEmail,
@@ -20,20 +19,14 @@ import {
 } from '@/schemas/signups';
 import { loadSignupForOrganizer } from '@/services/signups.cached';
 import { publishAction } from './actions';
+import { signupMetadata } from './signup-metadata';
 
 type PageProps = {
   params: Promise<{ id: string }>;
   searchParams: Promise<{ aiDraft?: string; all?: string }>;
 };
 
-export async function generateMetadata({ params }: { params: Promise<{ id: string }> }) {
-  const { id } = await params;
-  const session = await getOrganizerSession();
-  if (!session) return { title: 'OpenSignup' };
-  const result = await loadSignupForOrganizer(toActor(session), id);
-  if (!result.ok) return { title: 'OpenSignup' };
-  return { title: result.value.title };
-}
+export const generateMetadata = signupMetadata;
 
 /**
  * A signup's own address. A draft with something in it opens on "Check your
@@ -54,12 +47,14 @@ export default async function SignupPage({ params, searchParams }: PageProps) {
     id: s.id,
     values: (s.values as Record<string, unknown>) ?? {},
     capacity: s.capacity,
+    status: s.status,
   }));
 
+  // A Magic Compose landing keeps its flag on the way to the builder, so the
+  // builder's banner shows the draft's warnings where they can be fixed.
+  const builderHref = `/app/signups/${id}/build${aiDraft === '1' ? '?aiDraft=1' : ''}`;
   if (sig.status !== 'draft' || !hasFilledSlot({ fields: sig.fields, slots })) {
-    // A Magic Compose draft whose values were all dropped still gets the
-    // builder's banner and its warnings.
-    redirect(`/app/signups/${id}/build${aiDraft === '1' ? '?aiDraft=1' : ''}`);
+    redirect(builderHref);
   }
 
   await trackOrganizerView({
@@ -70,9 +65,9 @@ export default async function SignupPage({ params, searchParams }: PageProps) {
     payload: { section: 'review' },
   });
 
-  const settings = SignupSettingsSchema.parse(sig.settings ?? {});
-  const requireEmail = requiresEmail(settings);
-  const sendReminders = sendsReminders(settings);
+  // Both read malformed settings as their defaults rather than failing.
+  const requireEmail = requiresEmail(sig.settings);
+  const sendReminders = sendsReminders(sig.settings);
   const hasDates = sig.slots.some((s) => s.slotAt !== null);
   const previewHref = `/app/signups/${id}/preview`;
 
@@ -115,12 +110,13 @@ export default async function SignupPage({ params, searchParams }: PageProps) {
           slots={slots}
           settings={sig.settings}
           showAll={all === '1'}
+          builderHref={builderHref}
         />
         <ReviewSignUpCard
           signupId={id}
           summary={whatHappensOnSignUp({
             requireEmail,
-            reminders: sendReminders && hasDates,
+            reminders: reminderReach(sendReminders, sig.slots),
             before: REMINDER_BEFORE,
           })}
           requireEmail={requireEmail}
@@ -140,7 +136,7 @@ export default async function SignupPage({ params, searchParams }: PageProps) {
           </AsyncSubmitButton>
         </form>
         <Link
-          href={`/app/signups/${id}/build`}
+          href={builderHref}
           className="self-start text-sm font-medium text-brand hover:underline"
         >
           Edit everything in the builder

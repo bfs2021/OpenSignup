@@ -56,6 +56,11 @@ function readSettings(settings: unknown): {
   };
 }
 
+/** The field ref the signup groups its slots by, read as leniently as the rest. */
+export function groupByRef(settings: unknown): string | null {
+  return readSettings(settings).groupRef;
+}
+
 function isBlank(raw: unknown): boolean {
   return raw === undefined || raw === null || raw === '';
 }
@@ -234,10 +239,27 @@ export function hasFilledSlot({
 }
 
 /**
+ * Which slots a reminder will go out for: every slot, only some, or none.
+ * None when reminders are off; otherwise it depends on how many slots have a
+ * date still ahead to time a reminder from.
+ */
+export type ReminderReach = 'all' | 'some' | 'none';
+
+export function reminderReach(
+  sendReminders: boolean,
+  slots: readonly { slotAt: Date | null }[],
+  now: number = Date.now(),
+): ReminderReach {
+  if (!sendReminders || slots.length === 0) return 'none';
+  const ahead = slots.filter((s) => s.slotAt !== null && s.slotAt.getTime() > now).length;
+  if (ahead === 0) return 'none';
+  return ahead === slots.length ? 'all' : 'some';
+}
+
+/**
  * "What happens when someone signs up", in plain words, from the two settings
- * a new organizer is most likely to want to change. `reminders` is whether a
- * reminder will actually go out: the setting is on and some slot has a date
- * to time it from. `before` says when ("the day before").
+ * a new organizer is most likely to want to change, promising a reminder
+ * only where one will go out. `before` says when ("the day before").
  */
 export function whatHappensOnSignUp({
   requireEmail,
@@ -245,15 +267,23 @@ export function whatHappensOnSignUp({
   before,
 }: {
   requireEmail: boolean;
-  reminders: boolean;
+  reminders: ReminderReach;
   before: string;
 }): string {
   if (requireEmail) {
-    return reminders
-      ? `They give their name and email, and get a confirmation email now and a reminder ${before} their slot.`
-      : 'They give their name and email, and get a confirmation email. No reminder emails.';
+    if (reminders === 'all') {
+      return `They give their name and email, and get a confirmation email now and a reminder ${before} their slot.`;
+    }
+    if (reminders === 'some') {
+      return `They give their name and email, and get a confirmation email now, and a reminder ${before} if their slot has a date.`;
+    }
+    return 'They give their name and email, and get a confirmation email. No reminder emails.';
   }
-  return reminders
-    ? `They give their name. Email is optional: people who add one get a confirmation, and a reminder ${before} their slot.`
-    : 'They give their name. Email is optional: people who add one get a confirmation. No reminder emails.';
+  if (reminders === 'all') {
+    return `They give their name. Email is optional: people who add one get a confirmation, and a reminder ${before} their slot.`;
+  }
+  if (reminders === 'some') {
+    return `They give their name. Email is optional: people who add one get a confirmation, and a reminder ${before} if their slot has a date.`;
+  }
+  return 'They give their name. Email is optional: people who add one get a confirmation. No reminder emails.';
 }

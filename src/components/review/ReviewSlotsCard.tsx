@@ -6,7 +6,13 @@ import {
   pickPrimaryField,
   titleFor,
 } from '@/app/s/[slug]/slot-format';
-import { foldPlan, peopleLabel, sharedValues, signupHeadline } from '@/lib/signup-summary';
+import {
+  foldPlan,
+  groupByRef,
+  peopleLabel,
+  sharedValues,
+  signupHeadline,
+} from '@/lib/signup-summary';
 import type { SlotFieldDefinition } from '@/schemas/slot-fields';
 import { AiDraftWarnings } from './AiDraftWarnings';
 import { ReviewCard } from './ReviewCard';
@@ -15,6 +21,7 @@ interface ReviewSlot {
   id: string;
   values: Record<string, unknown>;
   capacity: number | null;
+  status: string;
 }
 
 /**
@@ -30,16 +37,17 @@ export function ReviewSlotsCard({
   slots,
   settings,
   showAll,
+  builderHref,
 }: {
   signupId: string;
   fields: SlotFieldDefinition[];
   slots: ReviewSlot[];
   settings: unknown;
   showAll: boolean;
+  builderHref: string;
 }) {
   const summary = { fields, slots, settings };
-  const groupRef =
-    (settings as { groupByFieldRefs?: string[] } | null)?.groupByFieldRefs?.[0] ?? null;
+  const groupRef = groupByRef(settings);
   const groupField = groupRef ? (fields.find((f) => f.ref === groupRef) ?? null) : null;
   const primary = pickPrimaryField(fields, groupField?.ref ?? null);
   // The row title stays on every row, so it isn't said again above them.
@@ -93,7 +101,7 @@ export function ReviewSlotsCard({
                       ) : null}
                     </span>
                     <span className="shrink-0 text-[13px] text-ink-muted">
-                      {peopleLabel(slot.capacity)}
+                      {slot.status === 'closed' ? 'Closed' : peopleLabel(slot.capacity)}
                     </span>
                   </li>
                 );
@@ -132,10 +140,7 @@ export function ReviewSlotsCard({
       </div>
       <p className="text-[13px] leading-relaxed text-ink-muted">
         Need something else, like another field or a different grouping?{' '}
-        <Link
-          href={`/app/signups/${signupId}/build`}
-          className="font-medium text-brand hover:underline"
-        >
+        <Link href={builderHref} className="font-medium text-brand hover:underline">
           Open the full builder
         </Link>
       </p>
