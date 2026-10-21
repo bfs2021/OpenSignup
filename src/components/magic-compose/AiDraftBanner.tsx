@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import { Banner } from '@/components/banner';
 import { useDismissibleQueryFlag } from '@/hooks/useDismissibleQueryFlag';
-import { AiDraftWarningList } from '@/components/review/AiDraftWarnings';
+import { AiDraftWarningList } from './AiDraftWarningList';
 import { clearAiDraftWarnings, readAiDraftWarnings } from './ai-draft-warnings';
 
 export function AiDraftBanner({
