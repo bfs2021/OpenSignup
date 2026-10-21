@@ -147,6 +147,7 @@ export function NoticeFixes({
           required
           maxLength={labelMaxLength}
           autoComplete="off"
+          placeholder="New name"
           aria-label={offer.name}
           className="h-9 min-w-0 flex-1 rounded-lg border border-surface-sunk bg-white px-3 text-base text-ink focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand sm:text-[14px]"
         />
