@@ -15,12 +15,15 @@ describe('fixRefusal', () => {
     expect(fixRefusal(serviceError('conflict', 'x', reason('changed')), 'undo')).toBe(
       'That changed again since, so it can’t be undone.',
     );
-    // A field of that name added back meanwhile; a slot no longer accepted.
+    // A field of that name added back meanwhile.
     expect(fixRefusal(serviceError('conflict', 'field ref "notes" already exists'), 'undo')).toBe(
       'That changed again since, so it can’t be undone.',
     );
+  });
+
+  it('says an undo the services refused for its input couldn’t be done, not that things changed', () => {
     expect(fixRefusal(serviceError('invalid_input', 'unknown field ref "x"'), 'undo')).toBe(
-      'That changed again since, so it can’t be undone.',
+      'Couldn’t undo that. Change it in the builder.',
     );
   });
 

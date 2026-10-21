@@ -27,7 +27,11 @@ export function fixRefusal(error: ServiceError, step: 'fix' | 'undo'): string {
     case 'invalid_input':
       // A fix finds the problem gone; an undo finds what it would put back
       // already changed, or no longer accepted.
-      if (step === 'undo') return 'That changed again since, so it can’t be undone.';
+      if (step === 'undo') {
+        return error.code === 'conflict'
+          ? 'That changed again since, so it can’t be undone.'
+          : 'Couldn’t undo that. Change it in the builder.';
+      }
       if (reason === 'stale') {
         return 'That changed since you opened this page, so nothing was done.';
       }

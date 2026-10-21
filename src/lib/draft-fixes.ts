@@ -16,7 +16,15 @@ import {
   UNTITLED_FIELD_LABEL,
   type SlotFieldDefinition,
 } from '@/schemas/slot-fields';
-import type { DraftInput, DraftNotice, DraftNoticeOf, DraftSlot } from './draft-checks';
+import {
+  findBlankSlots,
+  isEmpty,
+  type DraftInput,
+  type DraftNotice,
+  type DraftNoticeOf,
+  type DraftSlot,
+} from './draft-checks';
+import { resolveAnchorRef } from './reminder-fields';
 import { groupByRef } from './signup-summary';
 
 /** A notice of one of the kinds with a one-tap fix (`DraftFixKind`). */
@@ -151,7 +159,13 @@ export function buildUndo(notice: FixableNotice, before: DraftState, label = '')
         // it leaves the grouping.
         settings: {
           ...(settings.reminderFromFieldRef === field.ref
-            ? { reminderFromFieldRef: field.ref }
+            ? {
+                reminderFromFieldRef: field.ref,
+                anchorAfter: resolveAnchorRef(
+                  settings,
+                  before.fields.filter((f) => f.id !== field.id),
+                ),
+              }
             : {}),
           ...(settings.groupByFieldRefs.includes(field.ref)
             ? { groupByFieldRefs: settings.groupByFieldRefs }
@@ -212,12 +226,6 @@ export function restoredLabel(previous: string): string {
   return previous.trim() === '' ? UNTITLED_FIELD_LABEL : previous;
 }
 
-function isEmptyValue(value: unknown): boolean {
-  return (
-    value === undefined || value === null || (typeof value === 'string' && value.trim() === '')
-  );
-}
-
 /**
  * How to undo a fix on the signup as it is `now`, or null when it changed
  * since in a way the undo would overwrite or can't put right: the field is
@@ -234,6 +242,14 @@ export function planUndo(undo: DraftFixUndo, now: DraftState): UndoPlan | null {
       // field: anything grouped since is a choice made after the fix.
       const regroup = undo.settings.groupByFieldRefs;
       if (regroup !== undefined && settings.groupByFieldRefs.length > 0) return null;
+      // Likewise a reminder date picked since: the anchor isn't what deleting
+      // the field left.
+      if (
+        undo.settings.reminderFromFieldRef !== undefined &&
+        (settings.reminderFromFieldRef ?? null) !== (undo.settings.anchorAfter ?? null)
+      ) {
+        return null;
+      }
       const next = undo.beforeFieldId;
       const restore = {
         ...(undo.settings.reminderFromFieldRef !== undefined
@@ -250,6 +266,10 @@ export function planUndo(undo: DraftFixUndo, now: DraftState): UndoPlan | null {
       };
     }
     case 'blank_slot': {
+      // The fix removed every blank slot, so one there now means this undo
+      // already ran (its answer lost, say) or one was added since: putting
+      // them back again would double them.
+      if (findBlankSlots(draftInputOf(now)).length > 0) return null;
       // With the values of the fields that still exist, as deleting a field
       // leaves every slot; and only blank slots come back.
       const refs = new Set(now.fields.map((f) => f.ref));
@@ -258,7 +278,7 @@ export function planUndo(undo: DraftFixUndo, now: DraftState): UndoPlan | null {
         capacity: s.capacity,
         sortOrder: s.sortOrder,
       }));
-      if (rows.some((r) => !Object.values(r.values).every(isEmptyValue))) return null;
+      if (rows.some((r) => !Object.values(r.values).every(isEmpty))) return null;
       return {
         kind: 'blank_slot',
         rows,

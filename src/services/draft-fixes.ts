@@ -81,9 +81,11 @@ async function loadDraft(
  * Fixes the problem `rawInput` names, if the draft still has exactly that
  * problem. The checks run again on the signup as it is now and the request
  * must match one of their notices by kind and ids; otherwise nothing changes
- * and the answer is `conflict` with `details.reason: 'stale'`. A stale page,
- * or a change made meanwhile in another tab or by an AI assistant, can never
- * have a fix applied to something the organizer didn't see.
+ * and the answer is `conflict` with `details.reason: 'stale'`. So a stale
+ * page, or a change made in another tab or by an AI assistant since it
+ * loaded, doesn't have a fix applied to something the organizer didn't see.
+ * The check runs just before the service call, not inside its transaction: a
+ * change landing in between is not caught.
  *
  * Writes `review.notice_accepted` with the kind once the fix is made: best
  * effort and outside the fix's own transactions, as it describes no change of
@@ -166,7 +168,12 @@ async function fix(
           if (r.error.code !== 'not_found') break;
         }
       }
-      if (removed.length === 0) return err(refused ?? conflict('stale', 'no slot to remove'));
+      // Every one gone already: another tab got there first.
+      if (removed.length === 0) {
+        return err(
+          refused && refused.code !== 'not_found' ? refused : conflict('stale', 'no slot to remove'),
+        );
+      }
       return ok({ ...notice, slotIds: removed });
     }
     case 'unnamed_field': {

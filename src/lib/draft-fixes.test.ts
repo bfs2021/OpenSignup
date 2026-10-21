@@ -174,7 +174,20 @@ describe('buildUndo', () => {
       kind: 'empty_field',
       field: { ref: 'date', label: 'Date', fieldType: 'date', config: { fieldType: 'date' } },
       beforeFieldId: 'f_notes',
-      settings: { reminderFromFieldRef: 'date', groupByFieldRefs: ['date'] },
+      // The anchor deleting it leaves: no other date field, so none.
+      settings: { reminderFromFieldRef: 'date', anchorAfter: null, groupByFieldRefs: ['date'] },
+    });
+  });
+
+  it('remembers the anchor deleting the field moves to', () => {
+    const start = field('f_start', 'start', 'Start', 'date', 3);
+    const before = state({
+      fields: [what, date, notes, start],
+      slots: [slot('a', { what: 'Setup', notes: 'Gloves', start: '2030-11-14' })],
+      settings: { reminderFromFieldRef: 'date' },
+    });
+    expect(buildUndo(only(before, 'empty_field'), before)).toMatchObject({
+      settings: { reminderFromFieldRef: 'date', anchorAfter: 'start' },
     });
   });
 
@@ -272,13 +285,32 @@ describe('planUndo', () => {
       kind: 'empty_field',
       field: { ref: 'date', label: 'Date', fieldType: 'date', config: { fieldType: 'date' } },
       beforeFieldId: null,
-      settings: { reminderFromFieldRef: 'date', groupByFieldRefs: ['date'] },
+      settings: { reminderFromFieldRef: 'date', anchorAfter: null, groupByFieldRefs: ['date'] },
     };
     expect(planUndo(removedDate, state({ fields: [what], settings: {} }))).toMatchObject({
       settings: { reminderFromFieldRef: 'date', groupByFieldRefs: ['date'] },
     });
     expect(
       planUndo(removedDate, state({ fields: [what], settings: { groupByFieldRefs: ['what'] } })),
+    ).toBeNull();
+  });
+
+  it('puts the anchor back only while it is where deleting the field left it', () => {
+    const start = field('f_start', 'start', 'Start', 'date', 2);
+    const end = field('f_end', 'end', 'End', 'date', 3);
+    const removedDate: DraftFixUndo = {
+      kind: 'empty_field',
+      field: { ref: 'date', label: 'Date', fieldType: 'date', config: { fieldType: 'date' } },
+      beforeFieldId: null,
+      settings: { reminderFromFieldRef: 'date', anchorAfter: 'start' },
+    };
+    const fields = [what, start, end];
+    expect(
+      planUndo(removedDate, state({ fields, settings: { reminderFromFieldRef: 'start' } })),
+    ).toMatchObject({ settings: { reminderFromFieldRef: 'date' } });
+    // The organizer picked End since: Undo would overwrite that choice.
+    expect(
+      planUndo(removedDate, state({ fields, settings: { reminderFromFieldRef: 'end' } })),
     ).toBeNull();
   });
 
@@ -298,6 +330,18 @@ describe('planUndo', () => {
       ],
       closed: [1],
     });
+  });
+
+  it('can’t add blank slots back twice', () => {
+    const undo: DraftFixUndo = {
+      kind: 'blank_slot',
+      slots: [{ values: {}, capacity: 1, sortOrder: 0, closed: false }],
+    };
+    // An undo whose answer was lost already put this one back.
+    const again = state({
+      slots: [slot('a', { what: 'Setup' }, { sortOrder: 1 }), slot('b', {}, { sortOrder: 0 })],
+    });
+    expect(planUndo(undo, again)).toBeNull();
   });
 
   it('adds back only blank slots', () => {

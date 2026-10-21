@@ -682,7 +682,7 @@ describe('applyDraftFixAction and undoDraftFixAction (db)', () => {
     const { id, before } = await draftFor(scenario);
     expect(
       await undoDraftFixAction(id, { kind: 'ungrouped_dates', ref: '' } as unknown as DraftFixUndo),
-    ).toEqual({ error: 'That changed again since, so it can’t be undone.' });
+    ).toEqual({ error: 'Couldn’t undo that. Change it in the builder.' });
     expect(await snapshot(id)).toEqual(before);
   });
 });

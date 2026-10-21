@@ -157,12 +157,18 @@ async function runFix<T>(
     throw e;
   }
   if (!result.ok) {
-    // The draft changed since the page loaded, so the page is out of date:
-    // it comes back as it is now, with the message. Any other refusal leaves
-    // it alone; a signup no longer a draft would send the page to the builder
+    // The page comes back as the signup is now, with the message: it may be
+    // out of date, or an undo may have done its first step before the second
+    // was refused. Not for a refusal of the person or of a signup that's no
+    // longer a draft, or gone: the re-render would send the page elsewhere
     // and the message would never be seen.
-    const reason = result.error.details?.reason;
-    if (reason === 'stale' || reason === 'changed') revalidateSignup(signupId);
+    const { code, details } = result.error;
+    const leave =
+      details?.reason === 'not_draft' ||
+      code === 'forbidden' ||
+      code === 'unauthorized' ||
+      code === 'not_found';
+    if (!leave) revalidateSignup(signupId);
     return { error: fixRefusal(result.error, step) };
   }
   // The review page comes back with this response, without the notice.

@@ -71,7 +71,8 @@ export type DraftNotice =
 
 export type DraftNoticeOf<K extends DraftCheckKind> = Extract<DraftNotice, { kind: K }>;
 
-function isEmpty(value: unknown): boolean {
+/** Empty as every check reads it: missing, null, or only whitespace. */
+export function isEmpty(value: unknown): boolean {
   return (
     value === undefined || value === null || (typeof value === 'string' && value.trim() === '')
   );

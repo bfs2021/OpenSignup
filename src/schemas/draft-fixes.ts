@@ -58,6 +58,12 @@ export const DraftFixUndoSchema = z.discriminatedUnion('kind', [
       settings: z
         .object({
           reminderFromFieldRef: z.string().min(1).max(64).optional(),
+          /**
+           * With `reminderFromFieldRef`: the anchor deleting the field left
+           * (null for none). Undo puts the old one back only while it's still
+           * this, so a reminder date chosen since isn't overwritten.
+           */
+          anchorAfter: z.string().min(1).max(64).nullable().optional(),
           groupByFieldRefs: z.array(z.string().max(64)).max(1).optional(),
         })
         .strict(),
