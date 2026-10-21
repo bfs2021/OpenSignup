@@ -7,8 +7,7 @@ import { sendTelemetryBeacon } from './telemetry-beacon';
  * travel: the server reads the rest (who, which workspace, the signup's
  * status) from the session and the signup.
  */
-export const SIGNUP_LINK_EVENTS = ['copied', 'shared'] as const;
-export type SignupLinkEvent = (typeof SIGNUP_LINK_EVENTS)[number];
+export type SignupLinkEvent = 'copied' | 'shared';
 
 /**
  * Where on the organizer's pages the link was copied or shared from: the

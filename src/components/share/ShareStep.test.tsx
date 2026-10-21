@@ -3,7 +3,6 @@
 import '@testing-library/jest-dom/vitest';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { shareMessage } from '@/lib/share-message';
 import { ShareStep } from './ShareStep';
 
 const emit = vi.hoisted(() => vi.fn());
@@ -21,7 +20,6 @@ function renderStep() {
       title="Snack duty"
       url={LINK}
       slug="snack-duty"
-      message={shareMessage('Snack duty', LINK)}
       doneHref="/app/signups/sig_1/build"
     />,
   );

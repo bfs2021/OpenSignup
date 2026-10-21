@@ -148,10 +148,13 @@ describe('POST /api/signups/[id]/link-events (db)', () => {
     expect(await rows('signup.link_copied')).toEqual([]);
   });
 
-  it('refuses an event or surface it doesn’t know', async () => {
+  it('refuses an event or surface it doesn’t know, or a share from anywhere but the share step', async () => {
     expect((await beacon(signupId, 'event=opened&surface=header')).status).toBe(400);
     expect((await beacon(signupId, 'event=copied&surface=elsewhere')).status).toBe(400);
     expect((await beacon(signupId, 'event=shared&surface=elsewhere')).status).toBe(400);
+    // Only the share step has a Share… button.
+    expect((await beacon(signupId, 'event=shared&surface=header')).status).toBe(400);
+    expect((await beacon(signupId, 'event=shared&surface=share_message')).status).toBe(400);
     expect((await beacon(signupId, 'event=copied')).status).toBe(400);
     expect(await rows('signup.link_copied')).toEqual([]);
     expect(await rows('signup.link_shared')).toEqual([]);

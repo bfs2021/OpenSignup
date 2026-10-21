@@ -4,7 +4,7 @@ import { useEffect, useId, useState } from 'react';
 import Link from 'next/link';
 import { Check, Copy, Share } from 'lucide-react';
 import { useClipboardCopy } from '@/hooks/useClipboardCopy';
-import { withLink } from '@/lib/share-message';
+import { shareMessage, withLink } from '@/lib/share-message';
 import { emitSignupLinkEvent } from '@/lib/signup-link-events';
 import { ShareQrCode } from './ShareQrCode';
 
@@ -22,20 +22,17 @@ export function ShareStep({
   title,
   url,
   slug,
-  message: initialMessage,
   doneHref,
 }: {
   signupId: string;
   title: string;
   url: string;
   slug: string;
-  /** The message to start from, in `shareMessage`'s fixed words. */
-  message: string;
   doneHref: string;
 }) {
   const link = useClipboardCopy();
   const messageCopy = useClipboardCopy();
-  const [message, setMessage] = useState(initialMessage);
+  const [message, setMessage] = useState(() => shareMessage(title, url));
   const [canShare, setCanShare] = useState(false);
   const messageId = useId();
 
@@ -78,8 +75,8 @@ export function ShareStep({
           It&apos;s live. Now send the link.
         </h1>
         <p className="text-[15px] leading-relaxed text-ink-muted">
-          <span className="break-words font-semibold text-ink">{title}</span>
-          {/[.!?…]$/.test(title) ? '' : '.'} People sign up from this link, with no account.
+          <span className="break-words font-semibold text-ink">{title.trim()}</span>
+          {/[.!?…]$/.test(title.trim()) ? '' : '.'} People sign up from this link, with no account.
         </p>
       </div>
 

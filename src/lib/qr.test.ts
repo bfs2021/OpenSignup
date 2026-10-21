@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest';
 import { correction, generate } from 'lean-qr/nano';
 import {
   QR_QUIET_ZONE,
-  paintQr,
   qrPngScale,
   qrRuns,
   qrSide,
@@ -59,25 +58,6 @@ describe('qrSide and qrPngScale', () => {
     expect(scale).toBe(35);
     expect(scale * qrSide(smallest)).toBeGreaterThanOrEqual(1000);
     expect((scale - 1) * qrSide(smallest)).toBeLessThan(1000);
-  });
-});
-
-describe('paintQr', () => {
-  it('fills the canvas white, then each run black at the scale given', () => {
-    const calls: [string, number, number, number, number][] = [];
-    const ctx = {
-      fillStyle: '' as CanvasRenderingContext2D['fillStyle'],
-      fillRect(x: number, y: number, w: number, h: number) {
-        calls.push([String(this.fillStyle), x, y, w, h]);
-      },
-    };
-    paintQr(ctx, grid('#.', '.#'), 10);
-    const side = (2 + 2 * Q) * 10;
-    expect(calls).toEqual([
-      ['#ffffff', 0, 0, side, side],
-      ['#000000', Q * 10, Q * 10, 10, 10],
-      ['#000000', (Q + 1) * 10, (Q + 1) * 10, 10, 10],
-    ]);
   });
 });
 

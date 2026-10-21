@@ -67,7 +67,9 @@ wait Saved
 click Done
 ss organizer-builder
 click Publish
-wait Signup published
+wait It's live. Now send the link.
+click Done, go to my signup
+wait-url /build
 follow Open public page
 as-visitor
 wait Fruit and water

@@ -5,13 +5,14 @@ import { serviceError, type ServiceError } from '@/lib/errors';
 import { parseInputSafe } from '@/lib/parse';
 import { requireWorkspaceAccess, type Actor } from '@/lib/policy';
 import { err, ok, type Result } from '@/lib/result';
-import { SIGNUP_LINK_EVENTS, SIGNUP_LINK_SURFACES } from '@/lib/signup-link-events';
+import { SIGNUP_LINK_SURFACES } from '@/lib/signup-link-events';
 import { readLiveSignup } from './locks';
 
-const SignupLinkEventInputSchema = z.object({
-  event: z.enum(SIGNUP_LINK_EVENTS),
-  surface: z.enum(SIGNUP_LINK_SURFACES),
-});
+// Only the share step has a Share… button, so a share names no other surface.
+const SignupLinkEventInputSchema = z.discriminatedUnion('event', [
+  z.object({ event: z.literal('copied'), surface: z.enum(SIGNUP_LINK_SURFACES) }),
+  z.object({ event: z.literal('shared'), surface: z.literal('share_step') }),
+]);
 
 const EVENT_TYPES = {
   copied: 'signup.link_copied',

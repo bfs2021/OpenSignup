@@ -1,8 +1,9 @@
 /**
  * Drawing a QR code that the browser made itself, with no outside service:
- * the share step's preview (an SVG path) and its download (a PNG drawn on a
- * canvas). The encoder is loaded on demand; these helpers only read its
- * module grid, so they stay small and testable without it.
+ * the share step's preview (an SVG path) and the size of its download (a PNG
+ * the encoder draws on a canvas). The encoder is loaded on demand; these
+ * helpers only read its module grid, so they stay small and testable
+ * without it.
  */
 
 /** A QR code's square grid of modules, as `lean-qr` returns it. */
@@ -57,21 +58,4 @@ export function qrSvgPath(code: QrModules): string {
 /** Whole pixels per module, so the downloaded picture is at least `minPx` wide. */
 export function qrPngScale(code: QrModules, minPx: number): number {
   return Math.ceil(minPx / qrSide(code));
-}
-
-type Paint = Pick<CanvasRenderingContext2D, 'fillStyle' | 'fillRect'>;
-
-/**
- * Paints the code, margin included, black on white, at `scale` pixels per
- * module, from the canvas's top left corner. The canvas should be
- * `qrSide(code) * scale` pixels square.
- */
-export function paintQr(ctx: Paint, code: QrModules, scale: number): void {
-  const side = qrSide(code) * scale;
-  ctx.fillStyle = '#ffffff';
-  ctx.fillRect(0, 0, side, side);
-  ctx.fillStyle = '#000000';
-  for (const { x, y, length } of qrRuns(code)) {
-    ctx.fillRect(x * scale, y * scale, length * scale, scale);
-  }
 }
