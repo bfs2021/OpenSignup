@@ -164,8 +164,10 @@ derives everything from `AUTH_URL`:
   setup, `docker compose exec web pnpm oauth:keys rotate`), then restart every
   web instance so it signs with the new key. Wait 15 minutes, so every token
   the old key signed has expired, then run `pnpm oauth:keys retire <kid>` with
-  the old key's id, which `rotate` prints. Nobody is disconnected: assistants
-  refresh their tokens on their own.
+  the old key's id, which `rotate` prints. Every instance stops trusting the
+  retired key within 5 minutes, when it next re-reads the keys, with no
+  restart. Nobody is disconnected: assistants refresh their tokens on their
+  own.
 
 Discovery is served at `/.well-known/oauth-authorization-server` (and the
 identical `/.well-known/openid-configuration`) plus

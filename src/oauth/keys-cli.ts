@@ -9,15 +9,17 @@
  * newest key only once it restarts. Tokens the old key signed stay valid
  * until they expire, so wait at least `OAUTH_TTL.ACCESS_TOKEN` after the
  * restart before retiring it, or connected assistants get a 401 and have to
- * refresh. Lives under `src/` rather than `scripts/` so the production image,
- * which ships `src` and `tsx`, can run it.
+ * refresh. A retired key stops being trusted once each instance re-reads its
+ * keys, within `SIGNING_KEY_CACHE_MAX_AGE`, with no restart. Lives under
+ * `src/` rather than `scripts/` so the production image, which ships `src`
+ * and `tsx`, can run it.
  */
 import { config } from 'dotenv';
 config({ path: '.env.local' });
 config({ path: '.env' });
 
 import { getDb } from '@/db/client';
-import { OAUTH_TTL } from './config';
+import { OAUTH_TTL, SIGNING_KEY_CACHE_MAX_AGE } from './config';
 import { loadOrCreateSigningKeys, retireSigningKey, rotateSigningKey } from './keys';
 
 async function printActiveKids(): Promise<void> {
@@ -51,7 +53,10 @@ async function main(): Promise<void> {
       process.exit(1);
     }
     await retireSigningKey(getDb(), kid);
-    console.log(`Retired ${kid}.\n`);
+    console.log(
+      `Retired ${kid}. Running instances stop trusting it within ` +
+        `${SIGNING_KEY_CACHE_MAX_AGE / 60} minutes, with no restart.\n`,
+    );
     await printActiveKids();
   } else {
     console.error('Usage: pnpm oauth:keys rotate | pnpm oauth:keys retire <kid>');

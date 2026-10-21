@@ -10,7 +10,7 @@ import { createLocalJWKSet, errors as joseErrors, jwtVerify, type JSONWebKeySet 
 import { getDb } from '@/db/client';
 import { log } from '@/lib/log';
 import type { Actor, WorkspaceRole } from '@/lib/policy';
-import { mcpResourceUrl, oauthIssuer } from '@/oauth/config';
+import { SIGNING_KEY_CACHE_MAX_AGE, mcpResourceUrl, oauthIssuer } from '@/oauth/config';
 import { getSigningKeys, resetSigningKeysCache } from '@/oauth/instance';
 import { protectedResourceMetadataUrl } from '@/oauth/resource-metadata';
 import { parseScopeString, type Scope } from '@/oauth/scopes';
@@ -119,7 +119,10 @@ function getVerifier(): OAuthTokenVerifier {
  * HTTP round trip to our own JWKS endpoint. Issuer and audience are
  * non-negotiable: a token minted for any other resource is rejected. On an
  * unknown `kid` the key set is re-read once, which is how a key rotated by
- * another instance becomes visible here.
+ * another instance becomes visible here. It is also re-read once it is
+ * `SIGNING_KEY_CACHE_MAX_AGE` old, which is how a retired key stops being
+ * trusted: a token signed with it carries a `kid` we already know, so the
+ * unknown-`kid` path alone would trust it until a restart.
  */
 export function createVerifier(opts: {
   issuer: string;
@@ -131,6 +134,7 @@ export function createVerifier(opts: {
     opts.loadKeys ?? (async () => ({ keys: (await getSigningKeys()).publicKeys }));
   const reload = opts.reload ?? resetSigningKeysCache;
   let keySet: ReturnType<typeof createLocalJWKSet> | null = null;
+  let loadedAt = 0;
   let lastReloadAt = 0;
 
   /**
@@ -139,12 +143,17 @@ export function createVerifier(opts: {
    * genuinely rotated key still shows up within that interval.
    */
   async function keys(force = false) {
-    if (force && Date.now() - lastReloadAt >= RELOAD_INTERVAL_MS) {
-      lastReloadAt = Date.now();
+    const now = Date.now();
+    const expired = keySet !== null && now - loadedAt >= SIGNING_KEY_CACHE_MAX_AGE * 1000;
+    if (expired || (force && now - lastReloadAt >= RELOAD_INTERVAL_MS)) {
+      lastReloadAt = now;
       reload();
       keySet = null;
     }
-    if (!keySet) keySet = createLocalJWKSet(await loadKeys());
+    if (!keySet) {
+      keySet = createLocalJWKSet(await loadKeys());
+      loadedAt = Date.now();
+    }
     return keySet;
   }
 

@@ -2,7 +2,7 @@ import { and, desc, eq, isNull } from 'drizzle-orm';
 import type { Db } from '@/db/client';
 import { signups, type Signup as SignupRow } from '@/db/schema/signups';
 import { slotFields } from '@/db/schema/slot-fields';
-import { slots } from '@/db/schema/slots';
+import { slots, type Slot as SlotRow } from '@/db/schema/slots';
 import { activityActor, recordActivity } from '@/lib/activity';
 import { serviceError, ServiceException, type ServiceError } from '@/lib/errors';
 import { makeId } from '@/lib/ids';
@@ -45,7 +45,7 @@ function isObject(v: unknown): v is Record<string, unknown> {
 }
 
 export interface SignupWithSlots extends SignupRow {
-  slots: (typeof slots.$inferSelect)[];
+  slots: SlotRow[];
   fields: SlotFieldDefinition[];
 }
 

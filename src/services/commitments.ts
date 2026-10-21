@@ -7,8 +7,8 @@ import {
   participantEmailKey,
   participants,
 } from '@/db/schema/participants';
-import { signups } from '@/db/schema/signups';
-import { slots } from '@/db/schema/slots';
+import { signups, type Signup } from '@/db/schema/signups';
+import { slots, type Slot } from '@/db/schema/slots';
 import { activityActor, recordActivity } from '@/lib/activity';
 import { serviceError, ServiceException, type ServiceError } from '@/lib/errors';
 import { makeId } from '@/lib/ids';
@@ -143,8 +143,8 @@ async function safeRecordAttemptFailed(
  * and `detail` are for the attempt_failed row.
  */
 function whyNotTakingPlaces(
-  signup: Pick<typeof signups.$inferSelect, 'status' | 'closesAt' | 'settings'>,
-  slot: Pick<typeof slots.$inferSelect, 'status' | 'slotAt'>,
+  signup: Pick<Signup, 'status' | 'closesAt' | 'settings'>,
+  slot: Pick<Slot, 'status' | 'slotAt'>,
 ): { reason: 'closed' | 'over_window'; detail: string; error: ServiceError } | null {
   if (slot.status !== 'open') {
     return {

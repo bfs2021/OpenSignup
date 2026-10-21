@@ -97,6 +97,30 @@ describe('createVerifier', () => {
     expect(reload).toHaveBeenCalledTimes(1);
     expect(loadKeys).toHaveBeenCalledTimes(2);
   });
+
+  it('stops trusting a retired key once the cached key set is SIGNING_KEY_CACHE_MAX_AGE old', async () => {
+    const { createVerifier } = await import('./bearer');
+    const { SIGNING_KEY_CACHE_MAX_AGE } = await import('@/oauth/config');
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      let keys = [rotatedJwk, publicJwk];
+      const reload = vi.fn();
+      const v = createVerifier({ issuer: ISSUER, resource: RESOURCE, loadKeys: async () => ({ keys }), reload });
+      const old = await mint(signer, 'k1', { iss: ISSUER, aud: RESOURCE, sub: 'org_1', client_id: 'c' }, { exp: '1h' });
+      await expect(v.verifyAccessToken(old)).resolves.toMatchObject({ clientId: 'c' });
+      // `pnpm oauth:keys retire k1`: the table no longer lists it, but a token
+      // signed with it names a kid this instance already knows.
+      keys = [rotatedJwk];
+      vi.advanceTimersByTime(SIGNING_KEY_CACHE_MAX_AGE * 1000 - 1000);
+      await expect(v.verifyAccessToken(old)).resolves.toMatchObject({ clientId: 'c' });
+      expect(reload).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(1000);
+      await expect(v.verifyAccessToken(old)).rejects.toMatchObject({ code: 'invalid_token' });
+      expect(reload).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe('createVerifier infrastructure failures', () => {
