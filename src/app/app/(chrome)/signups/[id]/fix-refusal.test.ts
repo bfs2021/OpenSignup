@@ -106,6 +106,12 @@ describe('fixRefusal', () => {
     expect(
       fixRefusal(serviceError('invalid_input', 'x', { field: 'capacity' }), 'set_capacity'),
     ).toBe('Type a whole number of people, 1 or more.');
+    expect(
+      fixRefusal(
+        serviceError('invalid_input', 'x', { field: 'capacity', ...reason('too_big') }),
+        'set_capacity',
+      ),
+    ).toBe('That’s more people than one slot can take.');
     // Only its own box: not a fix's or an undo's refusal on a capacity.
     expect(fixRefusal(serviceError('invalid_input', 'x', { field: 'capacity' }), 'undo')).toBe(
       'Couldn’t undo that. Change it in the builder.',

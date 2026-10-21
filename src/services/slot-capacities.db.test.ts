@@ -4,12 +4,13 @@ import { getDb, type Db } from '@/db/client';
 import { activity } from '@/db/schema/activity';
 import { workspaceMembers } from '@/db/schema/members';
 import { organizers } from '@/db/schema/organizers';
+import { signups } from '@/db/schema/signups';
 import { workspaces } from '@/db/schema/workspaces';
 import { makeId } from '@/lib/ids';
 import type { Actor } from '@/lib/policy';
 import { commitToSlot } from '@/services/commitments';
 import { createSignup, deleteSignup, publishSignup } from '@/services/signups';
-import { listSlotsForSignup, updateSlotCapacities } from '@/services/slots';
+import { addSlot, listSlotsForSignup, updateSlot, updateSlotCapacities } from '@/services/slots';
 import { settle, untilServiceBlockedOn, whileSigningUp } from '@/services/testing/locks';
 
 interface Fixture {
@@ -292,6 +293,8 @@ describe('updateSlotCapacities (db)', () => {
       { slots: [{ id: a }] },
       { slots: [{ id: a, capacity: 2, status: 'closed' }] },
       { slots: [{ id: a, capacity: 2 }], force: true },
+      { slots: [{ id: a, capacity: 2 }], onlyDraft: false },
+      { slots: [{ id: a, capacity: 2, expected: 0 }] },
     ];
     for (const input of cases) {
       const r = await updateSlotCapacities(fx.db, fx.actor, signupId, input);
@@ -300,6 +303,24 @@ describe('updateSlotCapacities (db)', () => {
     }
     expect(await capacitiesOf(fx, signupId)).toEqual([1]);
     expect(await slotUpdates(fx, signupId)).toHaveLength(0);
+  });
+
+  it('refuses a capacity bigger than the column holds as invalid_input, not a database error', async () => {
+    const {
+      signupId,
+      ids: [a],
+    } = await makeSignup(fx, 'Capacities too big', [1]);
+    const r = await updateSlotCapacities(fx.db, fx.actor, signupId, {
+      slots: [{ id: a!, capacity: 2_147_483_648 }],
+    });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toMatchObject({ code: 'invalid_input', field: 'slots.0.capacity' });
+    // The top of the column itself is fine.
+    const top = await updateSlotCapacities(fx.db, fx.actor, signupId, {
+      slots: [{ id: a!, capacity: 2_147_483_647 }],
+    });
+    expect(top.ok, JSON.stringify(top)).toBe(true);
+    expect(await capacitiesOf(fx, signupId)).toEqual([2_147_483_647]);
   });
 
   it('refuses a capacity below the places a slot has taken, naming it, and changes nothing', async () => {
@@ -504,5 +525,195 @@ describe('updateSlotCapacities (db)', () => {
       final[0] === 2 ? [5, 6, 7] : [2, 2, 2],
     );
     expect(await slotUpdates(fx, signupId)).toHaveLength(2);
+  });
+
+  // The guards the review page asks for, checked under the locks.
+  describe('guards', () => {
+    /** Runs `inside` holding the signup's row lock, starts `call` behind it, then commits. */
+    async function behindTheLock<T>(
+      signupId: string,
+      inside: (tx: Db) => Promise<void>,
+      call: () => Promise<T>,
+    ): Promise<T> {
+      let running: Promise<T> | undefined;
+      const held = fx.db.transaction(async (tx) => {
+        await tx.select().from(signups).where(eq(signups.id, signupId)).for('update');
+        await inside(tx as unknown as Db);
+        running = call();
+        await untilServiceBlockedOn(fx.db, tx, running);
+      });
+      await held.finally(() => settle(running));
+      return running!;
+    }
+
+    it('onlyDraft sets a draft, and refuses a signup that is published', async () => {
+      const { signupId, ids } = await makeSignup(fx, 'Guard draft', [1, 2]);
+      const ok = await updateSlotCapacities(fx.db, fx.actor, signupId, {
+        slots: ids.map((id) => ({ id, capacity: 3 })),
+        onlyDraft: true,
+      });
+      expect(ok.ok, JSON.stringify(ok)).toBe(true);
+
+      const published = await publishSignup(fx.db, fx.actor, signupId);
+      if (!published.ok) throw new Error(`publishSignup failed: ${published.error.message}`);
+      const r = await updateSlotCapacities(fx.db, fx.actor, signupId, {
+        slots: ids.map((id) => ({ id, capacity: 5 })),
+        onlyDraft: true,
+      });
+      expect(r.ok).toBe(false);
+      if (!r.ok) {
+        expect(r.error).toMatchObject({
+          code: 'conflict',
+          field: 'status',
+          received: 'open',
+          expected: 'draft',
+        });
+      }
+      expect(await capacitiesOf(fx, signupId)).toEqual([3, 3]);
+      expect(await slotUpdates(fx, signupId)).toHaveLength(1);
+    });
+
+    it('onlyDraft refuses a publish that lands while it waits for the signup', async () => {
+      const { signupId, ids } = await makeSignup(fx, 'Guard publish race', [1, 2]);
+      const r = await behindTheLock(
+        signupId,
+        async (tx) => {
+          const published = await publishSignup(tx, fx.actor, signupId);
+          if (!published.ok) throw new Error(`publishSignup failed: ${published.error.message}`);
+        },
+        // Read as a draft before the publish committed.
+        () =>
+          updateSlotCapacities(fx.db, fx.actor, signupId, {
+            slots: ids.map((id) => ({ id, capacity: 5 })),
+            onlyDraft: true,
+          }),
+      );
+      expect(r.ok).toBe(false);
+      if (!r.ok) expect(r.error).toMatchObject({ code: 'conflict', field: 'status' });
+      expect(await capacitiesOf(fx, signupId)).toEqual([1, 2]);
+      expect(await slotUpdates(fx, signupId)).toHaveLength(0);
+    });
+
+    it('wholeSignup takes every slot, and refuses a list that leaves one out', async () => {
+      const {
+        signupId,
+        ids: [a, b, c],
+      } = await makeSignup(fx, 'Guard whole', [1, 2, 3]);
+      const r = await updateSlotCapacities(fx.db, fx.actor, signupId, {
+        slots: [
+          { id: a!, capacity: 4 },
+          { id: c!, capacity: 4 },
+        ],
+        wholeSignup: true,
+      });
+      expect(r.ok).toBe(false);
+      if (!r.ok) {
+        expect(r.error).toMatchObject({
+          code: 'conflict',
+          field: 'slots',
+          details: { missing: [b] },
+        });
+      }
+      expect(await capacitiesOf(fx, signupId)).toEqual([1, 2, 3]);
+
+      const all = await updateSlotCapacities(fx.db, fx.actor, signupId, {
+        slots: [a!, b!, c!].map((id) => ({ id, capacity: 4 })),
+        wholeSignup: true,
+      });
+      expect(all.ok, JSON.stringify(all)).toBe(true);
+      expect(await capacitiesOf(fx, signupId)).toEqual([4, 4, 4]);
+    });
+
+    it('wholeSignup refuses a slot added before it takes the lock', async () => {
+      const { signupId, ids } = await makeSignup(fx, 'Guard added race', [1, 2]);
+      let added = '';
+      const r = await behindTheLock(
+        signupId,
+        async (tx) => {
+          const slot = await addSlot(tx, fx.actor, signupId, {
+            values: { what: 'z' },
+            capacity: 9,
+          });
+          if (!slot.ok) throw new Error(`addSlot failed: ${slot.error.message}`);
+          added = slot.value.id;
+        },
+        // Every slot there was before the add committed.
+        () =>
+          updateSlotCapacities(fx.db, fx.actor, signupId, {
+            slots: ids.map((id) => ({ id, capacity: 5 })),
+            wholeSignup: true,
+          }),
+      );
+      expect(r.ok).toBe(false);
+      if (!r.ok) {
+        expect(r.error).toMatchObject({
+          code: 'conflict',
+          field: 'slots',
+          details: { missing: [added] },
+        });
+      }
+      expect(await capacitiesOf(fx, signupId)).toEqual([1, 2, 9]);
+      expect(await slotUpdates(fx, signupId)).toHaveLength(0);
+    });
+
+    it('expected sets a slot still at that capacity, and refuses one changed since', async () => {
+      const {
+        signupId,
+        ids: [a, b],
+      } = await makeSignup(fx, 'Guard expected', [4, null]);
+      const r = await updateSlotCapacities(fx.db, fx.actor, signupId, {
+        slots: [
+          { id: a!, capacity: 1, expected: 4 },
+          { id: b!, capacity: 1, expected: 5 },
+        ],
+      });
+      expect(r.ok).toBe(false);
+      if (!r.ok) {
+        expect(r.error).toMatchObject({
+          code: 'conflict',
+          field: 'slots',
+          received: 5,
+          details: { slotId: b, capacity: null },
+        });
+      }
+      // All or nothing: the slot that matched isn't set either.
+      expect(await capacitiesOf(fx, signupId)).toEqual([4, null]);
+
+      // No limit is expected as null.
+      const ok = await updateSlotCapacities(fx.db, fx.actor, signupId, {
+        slots: [
+          { id: a!, capacity: 1, expected: 4 },
+          { id: b!, capacity: 2, expected: null },
+        ],
+      });
+      expect(ok.ok, JSON.stringify(ok)).toBe(true);
+      expect(await capacitiesOf(fx, signupId)).toEqual([1, 2]);
+    });
+
+    it('expected refuses a capacity changed while it waits for the lock', async () => {
+      const {
+        signupId,
+        ids: [a, b],
+      } = await makeSignup(fx, 'Guard expected race', [4, 4]);
+      const r = await behindTheLock(
+        signupId,
+        async (tx) => {
+          const edited = await updateSlot(tx, fx.actor, b!, { capacity: 6 });
+          if (!edited.ok) throw new Error(`updateSlot failed: ${edited.error.message}`);
+        },
+        () =>
+          updateSlotCapacities(fx.db, fx.actor, signupId, {
+            slots: [
+              { id: a!, capacity: 1, expected: 4 },
+              { id: b!, capacity: 1, expected: 4 },
+            ],
+          }),
+      );
+      expect(r.ok).toBe(false);
+      if (!r.ok) {
+        expect(r.error).toMatchObject({ code: 'conflict', details: { slotId: b, capacity: 6 } });
+      }
+      expect(await capacitiesOf(fx, signupId)).toEqual([4, 6]);
+    });
   });
 });

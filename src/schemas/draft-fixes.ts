@@ -1,7 +1,13 @@
 import { z } from 'zod';
 import { SortOrderSchema } from './common';
 import { FIELD_TYPES, LABEL_MAX_LENGTH, RefSchema, SlotFieldConfigSchema } from './slot-fields';
-import { MAX_CAPACITY, MAX_MERGE_SLOTS, SLOTS_PER_BULK_ADD, SlotUnmergeInputSchema } from './slots';
+import {
+  CapacitySchema,
+  MAX_CAPACITY,
+  MAX_MERGE_SLOTS,
+  SLOTS_PER_BULK_ADD,
+  SlotUnmergeInputSchema,
+} from './slots';
 
 const IdSchema = z.string().min(1).max(64);
 
@@ -169,9 +175,7 @@ export const DraftFixUndoSchema = z.discriminatedUnion('kind', [
       capacity: PeopleEachSchema,
       /** Each slot it changed, with the capacity it had before; null for no limit. */
       previous: z
-        .array(
-          z.object({ id: IdSchema, capacity: z.number().int().positive().nullable() }).strict(),
-        )
+        .array(z.object({ id: IdSchema, capacity: CapacitySchema }).strict())
         .min(1)
         .max(SLOTS_PER_BULK_ADD),
     })

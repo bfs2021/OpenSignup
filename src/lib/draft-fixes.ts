@@ -182,16 +182,20 @@ export function draftSlotsRefusal(error: ServiceError, step: 'fix' | 'undo'): Se
 
 /**
  * A refusal from `updateSlotCapacities`, for "People for each slot" (`step`
- * 'fix') or its Undo, as `draftSlotsRefusal` words the others'. Both of its
- * refusals of a request that read fine come from a change since: a slot
- * that isn't the signup's any more, deleted meanwhile; and a capacity below
- * the places a slot has taken, which only someone signing up since the
- * signup was published can cause, as a draft takes none. So both read as
- * one ('stale' for the change, 'changed' for its Undo). Anything else passes
- * on without its field, which names the service's own input.
+ * 'fix') or its Undo, as `draftSlotsRefusal` words the others'. Its guards
+ * run under its locks: a signup no longer a draft reads as that
+ * ('not_draft'). Every other refusal of a request that read fine comes from a
+ * change since: a slot deleted, or added, meanwhile; a capacity no longer the
+ * one Undo expects; a capacity below the places a slot has taken, which a
+ * draft never has. So each reads as one ('stale' for the change, 'changed'
+ * for its Undo). Anything else passes on without its field, which names the
+ * service's own input.
  */
 export function capacitiesRefusal(error: ServiceError, step: 'fix' | 'undo'): ServiceError {
   const { code, message } = error;
+  if (code === 'conflict' && error.field === 'status') {
+    return serviceError('conflict', message, { details: { reason: 'not_draft' } });
+  }
   if (code === 'conflict' || (code === 'invalid_input' && error.field === 'slots')) {
     return serviceError('conflict', message, {
       details: { reason: step === 'fix' ? 'stale' : 'changed' },
@@ -297,7 +301,11 @@ export type UndoPlan =
   | { kind: 'unnamed_field'; fieldId: string; label: string }
   | { kind: 'ungrouped_dates'; groupByFieldRefs: string[] }
   | { kind: 'duplicate_slots'; unmerge: SlotUnmergeInput }
-  | { kind: 'set_capacity'; slots: { id: string; capacity: number | null }[] };
+  | {
+      kind: 'set_capacity';
+      /** Each slot's old capacity, while it still has the one Set gave it, `expected`. */
+      slots: { id: string; capacity: number | null; expected: number }[];
+    };
 
 /** A name that was blank goes back as the builder's default: a field needs one. */
 export function restoredLabel(previous: string): string {
@@ -383,10 +391,15 @@ export function planUndo(undo: DraftFixUndo, now: DraftState): UndoPlan | null {
       // Only while every slot it changed is still there and still takes the
       // number it set. A capacity changed since (a slot opened on the page,
       // the builder, an AI assistant) is never overwritten; and once this
-      // undo has run, no slot it names takes that number any more.
+      // undo has run, no slot it names takes that number any more. The
+      // service checks that number again under its locks (`expected`), for a
+      // change landing after this read.
       const capacities = new Map(now.slots.map((s) => [s.id, s.capacity]));
       if (!undo.previous.every((p) => capacities.get(p.id) === undo.capacity)) return null;
-      return { kind: 'set_capacity', slots: undo.previous };
+      return {
+        kind: 'set_capacity',
+        slots: undo.previous.map((p) => ({ ...p, expected: undo.capacity })),
+      };
     }
   }
 }

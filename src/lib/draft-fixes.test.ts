@@ -949,12 +949,13 @@ describe('planUndo for People for each slot', () => {
     ],
   });
 
-  it('puts back each slot it changed, and only those', () => {
+  it('puts back each slot it changed, and only those, while each still takes the number set', () => {
+    // `expected` has the service check that number again under its locks.
     expect(planUndo(undo, after)).toEqual({
       kind: 'set_capacity',
       slots: [
-        { id: 'a', capacity: 1 },
-        { id: 'c', capacity: null },
+        { id: 'a', capacity: 1, expected: 4 },
+        { id: 'c', capacity: null, expected: 4 },
       ],
     });
     // A slot added since, or one it didn't change taking another number,
@@ -1002,8 +1003,17 @@ describe('capacitiesRefusal', () => {
     serviceError(code, 'service words', field !== undefined ? { field, received: 'x' } : {});
   const reasonOf = (e: { details?: Record<string, unknown> }) => e.details?.reason;
 
-  it('reads a slot gone, or one taken since, as a change: stale, or changed for an undo', () => {
-    for (const error of [refused('invalid_input', 'slots'), refused('conflict', 'capacity')]) {
+  it('reads a signup no longer a draft as that, for the change and its undo', () => {
+    expect(reasonOf(capacitiesRefusal(refused('conflict', 'status'), 'fix'))).toBe('not_draft');
+    expect(reasonOf(capacitiesRefusal(refused('conflict', 'status'), 'undo'))).toBe('not_draft');
+  });
+
+  it('reads a slot gone, added, changed or taken since as a change: stale, or changed for an undo', () => {
+    for (const error of [
+      refused('invalid_input', 'slots'),
+      refused('conflict', 'slots'),
+      refused('conflict', 'capacity'),
+    ]) {
       expect(reasonOf(capacitiesRefusal(error, 'fix'))).toBe('stale');
       expect(reasonOf(capacitiesRefusal(error, 'undo'))).toBe('changed');
     }

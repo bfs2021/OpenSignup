@@ -361,6 +361,7 @@ function CapacityCard({ shared = null }: { shared?: number | null }) {
           fingerprint={FINGERPRINT}
           shared={shared}
           max={2_147_483_647}
+          failed="Couldn’t set that. Try again."
         />
       }
     >
@@ -439,7 +440,7 @@ describe('<PeopleForEachSlot />', () => {
     expect(actions.undoDraftFixAction).toHaveBeenCalledWith('sig_1', SET_UNDO);
   });
 
-  it('says when every slot already took that number, without Undo', async () => {
+  it('says by the box when every slot already took that number, keeping the last Undo', async () => {
     actions.removeDayAction.mockResolvedValue({
       done: 'Removed Sat, Apr 6 and its slot.',
       undo: DAY_UNDO,
@@ -448,14 +449,37 @@ describe('<PeopleForEachSlot />', () => {
       done: 'Every slot is already for 3 people.',
       undo: null,
     });
+    actions.undoDraftFixAction.mockResolvedValue(null);
     render(<CapacityCard shared={3} />);
     fireEvent.click(screen.getByRole('button', { name: 'Remove day: Sat, Apr 6' }));
     await waitFor(() => expect(undoButton()).toHaveFocus());
 
     fireEvent.click(setButton());
-    const said = await screen.findByText('Every slot is already for 3 people.');
-    expect(undoButton()).toBeNull();
-    await waitFor(() => expect(said.closest('[role="status"]')).toHaveFocus());
+    const note = await screen.findByText('Every slot is already for 3 people.');
+    // A note, read out politely, under the box, with focus; not an error.
+    expect(note).toHaveAttribute('role', 'status');
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(box().closest('form')?.parentElement).toContainElement(note);
+    await waitFor(() => expect(note.parentElement).toHaveFocus());
+    // The line still says what Remove day did, and its Undo still undoes it.
+    expect(screen.getByText('Removed Sat, Apr 6 and its slot.')).toBeInTheDocument();
+    fireEvent.click(undoButton()!);
+    expect(await screen.findByText('Undone.')).toBeInTheDocument();
+    expect(actions.undoDraftFixAction).toHaveBeenCalledWith('sig_1', DAY_UNDO);
+    // The next change clears the note.
+    expect(screen.queryByText('Every slot is already for 3 people.')).toBeNull();
+  });
+
+  it('keeps the number typed when a refusal brings the page back', async () => {
+    actions.setCapacityAction.mockResolvedValue({
+      error: 'That changed since you opened this page, so nothing was done.',
+    });
+    const { rerender } = render(<CapacityCard shared={3} />);
+    setTo('7');
+    await screen.findByRole('alert');
+    // The page came back with the slots as they are now.
+    rerender(<CapacityCard shared={null} />);
+    expect(box()).toHaveValue(7);
   });
 
   it('says why it was refused under the box, with focus, and keeps the last Undo', async () => {

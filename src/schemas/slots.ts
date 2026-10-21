@@ -69,23 +69,48 @@ export type SlotUpdateInput = z.infer<typeof SlotUpdateInputSchema>;
 /** The most slots one merge takes in: as many as one bulk add makes. */
 export const MAX_MERGE_SLOTS = 500;
 
-const CapacitySchema = z.number().int().positive().nullable();
-
 /** The top of the int `capacity` column: no slot can take more people. */
 export const MAX_CAPACITY = 2_147_483_647;
+
+/**
+ * A slot's capacity: a positive whole number the column can hold, or null for
+ * no limit. Above the column's top it is a structured `invalid_input`, not a
+ * database error. What it checks is a new capacity or one read from a slot,
+ * so it never refuses a capacity a slot already has.
+ */
+export const CapacitySchema = z.number().int().positive().max(MAX_CAPACITY).nullable();
 
 /**
  * A new capacity for each of several slots of one signup, set in one go
  * (issue #504, "People for each slot"): a positive whole number, or null for
  * no limit, as `SlotUpdateInputSchema` takes one. Each slot at most once, and
  * at most as many as one bulk add makes.
+ *
+ * Three optional guards, checked under the signup's and its slots' locks, so
+ * a change landing while the call waits for them is seen; each refuses with
+ * `conflict` and changes nothing:
+ * - `onlyDraft`: the signup must still be a draft (`field: 'status'`).
+ * - `wholeSignup`: the slots sent must be every slot of the signup, none
+ *   added since (`field: 'slots'`).
+ * - a slot's `expected`: its capacity must still be that (null for no limit)
+ *   (`field: 'slots'`), so an undo never overwrites a capacity changed since.
  */
 export const SlotCapacitiesInputSchema = z
   .object({
     slots: z
-      .array(z.object({ id: z.string().min(1), capacity: CapacitySchema }).strict())
+      .array(
+        z
+          .object({
+            id: z.string().min(1),
+            capacity: CapacitySchema,
+            expected: CapacitySchema.optional(),
+          })
+          .strict(),
+      )
       .min(1)
       .max(SLOTS_PER_BULK_ADD),
+    onlyDraft: z.literal(true).optional(),
+    wholeSignup: z.literal(true).optional(),
   })
   .strict()
   .superRefine((input, ctx) => {

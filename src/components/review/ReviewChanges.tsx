@@ -24,9 +24,9 @@ export const FIX_BUTTON_CLASS =
   'inline-flex h-9 shrink-0 items-center gap-2 rounded-lg border border-brand/30 bg-white px-3.5 text-[13px] font-semibold text-brand transition hover:bg-brand-soft/40 disabled:cursor-not-allowed disabled:opacity-70';
 
 /**
- * A change's answer: what it did and its undo (null when nothing was done),
- * or why it was refused. Nothing when the action sent the browser elsewhere,
- * such as to sign in again.
+ * A change's answer: what it did and its undo, or, with no undo, that there
+ * was nothing to do; or why it was refused. Nothing when the action sent the
+ * browser elsewhere, such as to sign in again.
  */
 type Answer = { done: string; undo: DraftFixUndo | null } | { error: string } | undefined;
 
@@ -37,12 +37,14 @@ interface LastChange {
 }
 
 /**
- * Why the last change or Undo was refused. `key` is the control that shows it
- * beside itself; null for the card's line.
+ * Why the last change or Undo was refused, or, as a `note`, that the change
+ * had nothing to do. `key` is the control that shows it beside itself; null
+ * for the card's line.
  */
-interface Refusal {
+interface Message {
   text: string;
   key: string | null;
+  note?: boolean;
 }
 
 /** Runs before a change; false stops it. */
@@ -55,12 +57,16 @@ interface ReviewChange {
   busy: (key: string) => boolean;
   /**
    * Makes a change: `send` asks the server for it; `failed` is what to say
-   * when no answer comes back, offline say. With `own`, a refusal shows
-   * beside the control `key` (`refusalFor`) rather than on the card's line.
+   * when no answer comes back, offline say. With `own`, a refusal, or a note
+   * that there was nothing to do, shows beside the control `key`
+   * (`messageFor`) rather than on the card's line.
    */
   change: (key: string, send: () => Promise<Answer>, failed: string, own?: boolean) => void;
-  refusalFor: (key: string) => Refusal | null;
-  /** The control `key` is gone: a refusal it showed moves to the card's line. */
+  messageFor: (key: string) => Message | null;
+  /**
+   * The control `key` is gone: a refusal it showed moves to the card's line,
+   * and a note goes.
+   */
   release: (key: string) => void;
   /** Sets what runs before every change and Undo; returns its removal. */
   registerBeforeChange: (run: BeforeChange) => () => void;
@@ -108,8 +114,9 @@ export function BusySpinner({ show }: { show: boolean }) {
  * changes would go with its row.
  *
  * After a change, focus goes to Undo, as the button pressed has gone with
- * its notice or its day; after Undo, or a change that did nothing, to the
- * line. What's inside stays as the server drew it.
+ * its notice or its day; after Undo, to the line. A change that had nothing
+ * to do leaves the line, and its Undo, as they were, and says so by the
+ * control instead. What's inside stays as the server drew it.
  */
 export function ReviewChanges({
   signupId,
@@ -125,7 +132,7 @@ export function ReviewChanges({
   // The control whose change is in flight, or 'undo'. Read only while pending.
   const [busyKey, setBusyKey] = useState<string | null>(null);
   const [last, setLast] = useState<LastChange | null>(null);
-  const [refusal, setRefusal] = useState<Refusal | null>(null);
+  const [message, setMessage] = useState<Message | null>(null);
   const status = useRef<HTMLDivElement>(null);
   const undoButton = useRef<HTMLButtonElement>(null);
   // Where focus goes once the page is back.
@@ -146,7 +153,8 @@ export function ReviewChanges({
   }, []);
 
   const release = useCallback(
-    (key: string) => setRefusal((r) => (r?.key === key ? { ...r, key: null } : r)),
+    (key: string) =>
+      setMessage((m) => (m?.key === key ? (m.note ? null : { ...m, key: null }) : m)),
     [],
   );
 
@@ -154,7 +162,7 @@ export function ReviewChanges({
   const ready = () => (beforeChange.current?.() ?? Promise.resolve(true)).catch(() => false);
 
   function change(key: string, send: () => Promise<Answer>, failed: string, own = false) {
-    setRefusal(null);
+    setMessage(null);
     setBusyKey(key);
     startTransition(async () => {
       if (!(await ready())) return;
@@ -164,17 +172,22 @@ export function ReviewChanges({
       startTransition(() => {
         if (!result) return;
         if ('error' in result) {
-          setRefusal({ text: result.error, key: own ? key : null });
+          setMessage({ text: result.error, key: own ? key : null });
           return;
         }
-        focusNext.current = result.undo ? 'undo' : 'status';
+        // Nothing done, so nothing to undo: the last change keeps the line.
+        if (!result.undo) {
+          setMessage({ text: result.done, key: own ? key : null, note: true });
+          return;
+        }
+        focusNext.current = 'undo';
         setLast({ text: result.done, undo: result.undo });
       });
     });
   }
 
   function undo(text: string, descriptor: DraftFixUndo) {
-    setRefusal(null);
+    setMessage(null);
     setBusyKey('undo');
     startTransition(async () => {
       if (!(await ready())) return;
@@ -185,23 +198,23 @@ export function ReviewChanges({
       startTransition(() => {
         if (result.failed) {
           // Undo stays, to try again.
-          setRefusal({ text: 'Couldn’t undo that. Try again.', key: null });
+          setMessage({ text: 'Couldn’t undo that. Try again.', key: null });
           return;
         }
         focusNext.current = 'status';
         // Refused: what the change did stays said, without Undo.
         setLast({ text: result.refused ? text : 'Undone.', undo: null });
-        if (result.refused) setRefusal({ text: result.refused.error, key: null });
+        if (result.refused) setMessage({ text: result.refused.error, key: null });
       });
     });
   }
 
   const busy = (key: string) => pending && busyKey === key;
-  const refusalFor = (key: string) => (refusal?.key === key ? refusal : null);
+  const messageFor = (key: string) => (message?.key === key ? message : null);
   const lastUndo = last?.undo ?? null;
   return (
     <ReviewChangeContext.Provider
-      value={{ pending, busy, change, refusalFor, release, registerBeforeChange }}
+      value={{ pending, busy, change, messageFor, release, registerBeforeChange }}
     >
       {header}
       {/* Out of the card's flow while empty, so it adds no gap, but always
@@ -226,7 +239,7 @@ export function ReviewChanges({
           </div>
         ) : null}
       </div>
-      {refusal && refusal.key === null ? <FormError>{refusal.text}</FormError> : null}
+      {message && message.key === null ? <MessageText message={message} /> : null}
       {children}
     </ReviewChangeContext.Provider>
   );
@@ -274,7 +287,7 @@ export function RemoveDayButton({
         <BusySpinner show={busy(key)} />
         Remove day
       </button>
-      <OwnRefusal control={key} />
+      <OwnMessage control={key} />
     </div>
   );
 }
@@ -286,25 +299,30 @@ const PEOPLE_EACH = 'set_capacity';
  * (issue #504): a number box and Set, which gives every slot of the draft
  * that many people at once, and says so with Undo on the card's line for its
  * changes. A refusal shows here, under the box, and takes focus, as Remove
- * day's does.
+ * day's does; so does the note that every slot already takes that number,
+ * which leaves the line and its Undo as they were.
  *
  * The box starts with the number every slot takes when they all take the
- * same one (`shared`), and empty otherwise. It takes a whole number, 1 or
- * more: no limit is set slot by slot. `fingerprint` stands for every slot the
- * page showed, so nothing is set on slots the organizer didn't see; `max` is
- * the most a slot can take, passed in so this doesn't load the schema. One
- * per page, so its box has a fixed id.
+ * same one (`shared`), and empty otherwise, and keeps what was typed after
+ * that, refused or not. It takes a whole number, 1 or more: no limit is set
+ * slot by slot. `fingerprint` stands for every slot the page showed, so
+ * nothing is set on slots the organizer didn't see. `max`, the most a slot
+ * can take, and `failed`, what to say when no answer comes back, are passed
+ * in so this loads neither the schema nor the refusal words. One per page,
+ * so its box has a fixed id.
  */
 export function PeopleForEachSlot({
   signupId,
   fingerprint,
   shared,
   max,
+  failed,
 }: {
   signupId: string;
   fingerprint: string;
   shared: number | null;
   max: number;
+  failed: string;
 }) {
   const { pending, busy, change } = useReviewChange();
 
@@ -315,7 +333,7 @@ export function PeopleForEachSlot({
     change(
       PEOPLE_EACH,
       () => setCapacityAction(signupId, { kind: 'set_capacity', capacity, fingerprint }),
-      'Couldn’t set that. Try again.',
+      failed,
       true,
     );
   }
@@ -328,9 +346,6 @@ export function PeopleForEachSlot({
         </label>
         <span className="flex gap-2">
           <input
-            // Starts again from what the page now shows once it comes back
-            // changed, as after Undo.
-            key={shared ?? ''}
             id="people-each"
             name="capacity"
             type="number"
@@ -353,30 +368,41 @@ export function PeopleForEachSlot({
           </button>
         </span>
       </form>
-      <OwnRefusal control={PEOPLE_EACH} />
+      <OwnMessage control={PEOPLE_EACH} />
     </div>
   );
 }
 
 /**
- * Why the change the control `control` made was refused, under that control
- * (a change made with `own`), taking focus as it appears, so it isn't missed
- * at the top of a long card. Rendered with the control: once the control is
- * gone, the refusal moves to the card's line.
+ * Why the change the control `control` made was refused, or that it had
+ * nothing to do, under that control (a change made with `own`), taking focus
+ * as it appears, so it isn't missed at the top of a long card. Rendered with
+ * the control: once the control is gone, a refusal moves to the card's line.
  */
-function OwnRefusal({ control }: { control: string }) {
-  const { refusalFor, release } = useReviewChange();
-  const refusal = refusalFor(control);
-  const alert = useRef<HTMLDivElement>(null);
+function OwnMessage({ control }: { control: string }) {
+  const { messageFor, release } = useReviewChange();
+  const message = messageFor(control);
+  const box = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    if (refusal) alert.current?.focus();
-  }, [refusal]);
+    if (message) box.current?.focus();
+  }, [message]);
   useEffect(() => () => release(control), [release, control]);
 
-  return refusal ? (
-    <div ref={alert} tabIndex={-1} className="self-stretch outline-none">
-      <FormError>{refusal.text}</FormError>
+  return message ? (
+    <div ref={box} tabIndex={-1} className="self-stretch outline-none">
+      <MessageText message={message} />
     </div>
   ) : null;
+}
+
+/** A refusal, as an alert; a note, read out politely and not as an error. */
+function MessageText({ message }: { message: Message }) {
+  return message.note ? (
+    <p role="status" className="rounded-lg bg-surface-raised px-3 py-2 text-sm">
+      {message.text}
+    </p>
+  ) : (
+    <FormError>{message.text}</FormError>
+  );
 }

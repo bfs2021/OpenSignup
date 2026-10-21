@@ -8,8 +8,11 @@ import { LABEL_MAX_LENGTH } from '@/schemas/slot-fields';
  */
 export type FixStep = 'fix' | 'remove_day' | 'set_capacity' | 'undo';
 
-/** What a change that failed for no reason to act on says: try again. */
-const FAILED: Record<FixStep, string> = {
+/**
+ * What a change that failed for no reason to act on says: try again. The
+ * page passes a control its own, to say when no answer comes back at all.
+ */
+export const FAILED: Record<FixStep, string> = {
   fix: 'Couldn’t fix that. Try again.',
   remove_day: 'Couldn’t remove that day. Try again.',
   set_capacity: 'Couldn’t set that. Try again.',
@@ -31,7 +34,9 @@ export function fixRefusal(error: ServiceError, step: FixStep): string {
     return 'This signup isn’t a draft any more. Change it in the builder.';
   }
   if (step === 'set_capacity' && error.code === 'invalid_input' && error.field === 'capacity') {
-    return 'Type a whole number of people, 1 or more.';
+    return reason === 'too_big'
+      ? 'That’s more people than one slot can take.'
+      : 'Type a whole number of people, 1 or more.';
   }
   // Only a fix takes a name: an undo's refusal on a field called "label" is
   // not about the rename box.

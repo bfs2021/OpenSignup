@@ -17,6 +17,7 @@ import { capacityOffer, removableDays, removeDayRequest } from '@/lib/draft-fixe
 import type { NoticeView } from '@/lib/draft-notices';
 import type { SlotFieldDefinition } from '@/schemas/slot-fields';
 import { MAX_CAPACITY } from '@/schemas/slots';
+import { FAILED } from '@/app/app/(chrome)/signups/[id]/fix-refusal';
 import { toBuildFields } from '@/components/build-shared/buildFields';
 import { AiDraftWarnings } from './AiDraftWarnings';
 import { ReviewCard } from './ReviewCard';
@@ -101,6 +102,7 @@ export function ReviewSlotsCard({
                   fingerprint={peopleEach.fingerprint}
                   shared={peopleEach.shared}
                   max={MAX_CAPACITY}
+                  failed={FAILED.set_capacity}
                 />
               ) : null}
             </div>

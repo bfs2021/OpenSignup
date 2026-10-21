@@ -12,6 +12,7 @@ import { slotSetFingerprint } from '@/lib/draft-fixes';
 import { makeId } from '@/lib/ids';
 import type { Actor } from '@/lib/policy';
 import { chargeRateLimit, RateLimits } from '@/lib/rate-limit';
+import { settle, untilServiceBlockedOn } from '@/services/testing/locks';
 import { DEFAULT_TEMPLATE, type SignupTemplate } from '@/lib/signup-templates';
 import type {
   DraftFixKind,
@@ -1163,6 +1164,22 @@ describe('applyDraftFixAction and undoDraftFixAction (db)', () => {
       expect(await events(id, 'review.fix_undone')).toHaveLength(0);
     });
 
+    it('refuses an undo with a capacity bigger than a slot holds, and changes nothing', async () => {
+      const { id, before } = await draftFor(mixed);
+      const set = await setCapacityAction(id, each(4, before));
+      if ('error' in set || !set.undo || set.undo.kind !== 'set_capacity')
+        throw new Error('not set');
+      const now = await snapshot(id);
+      const tooBig: DraftFixUndo = {
+        ...set.undo,
+        previous: [{ id: before.ids.slots[0]!, capacity: 3_000_000_000 }],
+      };
+      expect(await undoDraftFixAction(id, tooBig)).toEqual({
+        error: 'Couldn’t undo that. Change it in the builder.',
+      });
+      expect(await snapshot(id)).toEqual(now);
+    });
+
     it('undoes it only once', async () => {
       const { id, before } = await draftFor(mixed);
       const set = await setCapacityAction(id, each(4, before));
@@ -1177,13 +1194,93 @@ describe('applyDraftFixAction and undoDraftFixAction (db)', () => {
 
     it('refuses a number that isn’t a whole number of people, and sets nothing', async () => {
       const { id, before } = await draftFor(mixed);
-      for (const capacity of [0, -2, 2.5, Number.NaN, 3_000_000_000]) {
+      for (const capacity of [0, -2, 2.5, Number.NaN]) {
         expect(await setCapacityAction(id, each(capacity, before))).toEqual({
           error: 'Type a whole number of people, 1 or more.',
         });
       }
+      // In words of its own: it is a whole number, but more than a slot takes.
+      for (const capacity of [2_147_483_648, 3_000_000_000]) {
+        expect(await setCapacityAction(id, each(capacity, before))).toEqual({
+          error: 'That’s more people than one slot can take.',
+        });
+      }
       expect(await snapshot(id)).toEqual(before);
       expect(await events(id, 'review.slots_edited')).toHaveLength(0);
+    });
+
+    /**
+     * Runs `inside` holding the signup's row lock, then `action`, which reads
+     * the draft as it was and queues behind the lock; then commits.
+     */
+    async function behindTheLock<T>(
+      signupId: string,
+      inside: (tx: typeof db) => Promise<void>,
+      action: () => Promise<T>,
+    ): Promise<T> {
+      let running: Promise<T> | undefined;
+      const held = db.transaction(async (tx) => {
+        await tx.select().from(signups).where(eq(signups.id, signupId)).for('update');
+        await inside(tx as unknown as typeof db);
+        running = action();
+        await untilServiceBlockedOn(db, tx, running);
+      });
+      await held.finally(() => settle(running));
+      return running!;
+    }
+
+    it('sets nothing on a signup published while it waited', async () => {
+      const { id, before } = await draftFor(mixed);
+      const r = await behindTheLock(
+        id,
+        async (tx) => {
+          const published = await publishSignup(tx, owner, id);
+          if (!published.ok) throw new Error(published.error.message);
+        },
+        () => setCapacityAction(id, each(4, before)),
+      );
+      expect(r).toEqual({
+        error: 'This signup isn’t a draft any more. Change it in the builder.',
+      });
+      expect(await snapshot(id)).toEqual({ ...before, status: 'open' });
+      expect(await events(id, 'review.slots_edited')).toHaveLength(0);
+    });
+
+    it('sets nothing when a slot was added while it waited, rather than leave it out', async () => {
+      const { id, before } = await draftFor(mixed);
+      const r = await behindTheLock(
+        id,
+        async (tx) => {
+          const extra = await addSlot(tx, owner, id, {
+            values: { what: 'Music', date: '2030-04-06' },
+            capacity: 1,
+          });
+          if (!extra.ok) throw new Error(extra.error.message);
+        },
+        () => setCapacityAction(id, each(4, before)),
+      );
+      expect(r).toEqual(stale);
+      expect(await capacities(id)).toEqual([1, 3, null, 1]);
+      expect(await events(id, 'review.slots_edited')).toHaveLength(0);
+    });
+
+    it('won’t undo over a capacity changed while it waited', async () => {
+      const { id, before } = await draftFor(mixed);
+      const set = await setCapacityAction(id, each(4, before));
+      if ('error' in set || !set.undo) throw new Error('not set');
+      const { undo } = set;
+      const r = await behindTheLock(
+        id,
+        async (tx) => {
+          const edited = await updateSlot(tx, owner, before.ids.slots[0]!, { capacity: 6 });
+          if (!edited.ok) throw new Error(edited.error.message);
+        },
+        // Plans against 4 on every slot, read before the change committed.
+        () => undoDraftFixAction(id, undo),
+      );
+      expect(r).toEqual(changedAgain);
+      expect(await capacities(id)).toEqual([6, 4, 4]);
+      expect(await events(id, 'review.fix_undone')).toHaveLength(0);
     });
 
     it('refuses a viewer in plain words and sets nothing', async () => {

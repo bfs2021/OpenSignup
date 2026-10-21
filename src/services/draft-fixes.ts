@@ -19,7 +19,7 @@ import {
   type UndoPlan,
 } from '@/lib/draft-fixes';
 import { fixDoneText, removeDayDoneText, setCapacityDoneText } from '@/lib/draft-notices';
-import { serviceError, type ServiceError } from '@/lib/errors';
+import { fromZodError, serviceError, type ServiceError } from '@/lib/errors';
 import { parseInputSafe } from '@/lib/parse';
 import { requireWorkspaceWrite, type Actor } from '@/lib/policy';
 import { err, ok, type Result } from '@/lib/result';
@@ -251,9 +251,11 @@ export async function removeDraftDay(
  * The slots must be exactly the ones the page showed, by their fingerprint
  * (`findCapacitySlots`); otherwise nothing changes and the answer is
  * `conflict` with `details.reason: 'stale'`, as for Remove day: a slot added
- * or deleted since, by another tab or an AI assistant. As there, that check
- * runs just before the change, not inside its transaction, which checks
- * again that each slot is still the signup's.
+ * or deleted since, by another tab or an AI assistant. That check reads the
+ * draft before the change; the change checks again under its locks that the
+ * signup is still a draft and that these are still every one of its slots
+ * (`onlyDraft`, `wholeSignup`), so a publish or a slot added in between is
+ * refused too, rather than leaving a slot out.
  *
  * Returns what Remove day returns, with no undo when every slot already took
  * that number: nothing was done. Otherwise writes `review.slots_edited` with
@@ -266,19 +268,29 @@ export async function setDraftCapacity(
   signupId: string,
   rawInput: unknown,
 ): Promise<Result<Omit<AppliedDraftFix, 'undo'> & { undo: DraftFixUndo | null }, ServiceError>> {
-  const input = parseInputSafe(SetCapacityRequestSchema, rawInput);
-  if (!input.ok) return input;
-  const { capacity } = input.value;
+  const parsed = SetCapacityRequestSchema.safeParse(rawInput);
+  if (!parsed.success) {
+    // A number bigger than any slot can take is told apart from one that
+    // isn't a whole number of people at all, by the issue zod found.
+    const refused = fromZodError(parsed.error);
+    const tooBig = refused.field === 'capacity' && parsed.error.issues[0]?.code === 'too_big';
+    return err(tooBig ? { ...refused, details: { reason: 'too_big' } } : refused);
+  }
+  const request = parsed.data;
+  const { capacity } = request;
 
   const loaded = await loadDraft(db, actor, signupId);
   if (!loaded.ok) return loaded;
   const { workspaceId, state } = loaded.value;
 
-  const slotIds = findCapacitySlots(state.slots, input.value);
+  const slotIds = findCapacitySlots(state.slots, request);
   if (!slotIds) return err(conflict('stale', 'the draft no longer has the slots the page showed'));
 
+  // Checked again under the locks: still a draft, and these still every slot.
   const set = await updateSlotCapacities(db, actor, signupId, {
     slots: slotIds.map((id) => ({ id, capacity })),
+    onlyDraft: true,
+    wholeSignup: true,
   });
   if (!set.ok) return err(capacitiesRefusal(set.error, 'fix'));
   const { previous } = set.value;
@@ -386,7 +398,12 @@ async function undo(
       return r.ok ? ok(null) : err(draftSlotsRefusal(r.error, 'undo'));
     }
     case 'set_capacity': {
-      const r = await updateSlotCapacities(db, actor, signupId, { slots: plan.slots });
+      // Still a draft, and each slot still at the number Set gave it, under
+      // the locks.
+      const r = await updateSlotCapacities(db, actor, signupId, {
+        slots: plan.slots,
+        onlyDraft: true,
+      });
       return r.ok ? ok(null) : err(capacitiesRefusal(r.error, 'undo'));
     }
   }

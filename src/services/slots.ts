@@ -461,11 +461,16 @@ interface SlotCapacity {
  * An entry whose capacity is already the stored one is left alone, and when
  * none changes nothing is written and no activity is recorded.
  *
- * Not drafts only, though the review page offers it only on one. On a signup
- * people have signed up for, a capacity below the places a slot already has
- * taken is refused as `updateSlot` refuses it, naming the first such slot in
- * the order sent, and nothing changes. Any other change writes one
- * `slot.updated` row naming the slots that changed.
+ * Not drafts only, unless `onlyDraft` asks for that, as the review page does.
+ * On a signup people have signed up for, a capacity below the places a slot
+ * already has taken is refused as `updateSlot` refuses it, naming the first
+ * such slot in the order sent, and nothing changes. Any other change writes
+ * one `slot.updated` row naming the slots that changed.
+ *
+ * The input's guards (`onlyDraft`, `wholeSignup`, a slot's `expected`; see
+ * `SlotCapacitiesInputSchema`) are checked against the rows as locked, so a
+ * publish, a slot added or a capacity changed while this waited is seen, and
+ * refused with `conflict`.
  *
  * Returns the slots sent, as they now stand, in the order they are shown;
  * and `previous`, the capacity each changed slot had before, which sent back
@@ -479,7 +484,7 @@ export async function updateSlotCapacities(
 ): Promise<Result<{ slots: SlotRow[]; previous: SlotCapacity[] }, ServiceError>> {
   const input = parseInputSafe(SlotCapacitiesInputSchema, rawInput);
   if (!input.ok) return input;
-  const wanted: SlotCapacity[] = input.value.slots;
+  const { slots: wanted, onlyDraft, wholeSignup } = input.value;
 
   const signupRow = await readLiveSignup(db, signupId);
   if (!signupRow) return err(serviceError('not_found', 'signup not found'));
@@ -495,6 +500,19 @@ export async function updateSlotCapacities(
     // waited, too.
     const locked = await lockSignupForWrite(tx, signupId, workspaceId);
     if (!locked) return err(serviceError('not_found', 'signup not found'));
+    if (onlyDraft && locked.status !== 'draft') {
+      return err(
+        serviceError(
+          'conflict',
+          `only a draft's capacities are set this way, and this signup is ${locked.status}`,
+          {
+            field: 'status',
+            received: locked.status,
+            expected: 'draft',
+          },
+        ),
+      );
+    }
     const current = await lockSlotsForSignup(tx, signupId, workspaceId);
     const byId = new Map(current.map((s) => [s.id, s]));
 
@@ -509,6 +527,41 @@ export async function updateSlotCapacities(
           details: { unknown },
           suggestion: 'reload the signup: a slot may have been deleted or merged since',
         }),
+      );
+    }
+    if (wholeSignup) {
+      const asked = new Set(wanted.map((w) => w.id));
+      const missing = current.filter((s) => !asked.has(s.id)).map((s) => s.id);
+      if (missing.length > 0) {
+        return err(
+          serviceError(
+            'conflict',
+            `slot ${missing[0]} was not sent, and every slot was asked for`,
+            {
+              field: 'slots',
+              details: { missing },
+              suggestion: 'reload the signup: a slot may have been added since',
+            },
+          ),
+        );
+      }
+    }
+    const moved = wanted.find(
+      (w) => w.expected !== undefined && byId.get(w.id)!.capacity !== w.expected,
+    );
+    if (moved) {
+      const now = byId.get(moved.id)!.capacity;
+      return err(
+        serviceError(
+          'conflict',
+          `slot ${moved.id}: capacity is ${now ?? 'no limit'}, not the ${moved.expected ?? 'no limit'} expected`,
+          {
+            field: 'slots',
+            received: moved.expected,
+            details: { slotId: moved.id, capacity: now },
+            suggestion: 'reload the signup: its capacity changed since',
+          },
+        ),
       );
     }
 
@@ -557,7 +610,8 @@ export async function updateSlotCapacities(
 
     // One statement for every slot that changes: the new capacities travel as
     // one JSON parameter, as the ids do in `writeSlotOrder`.
-    const capacities = sql`jsonb_to_recordset(${JSON.stringify(changed)}::jsonb)
+    const writes = changed.map(({ id, capacity }) => ({ id, capacity }));
+    const capacities = sql`jsonb_to_recordset(${JSON.stringify(writes)}::jsonb)
       as wanted(id text, capacity int)`;
     const updated = await tx
       .update(slots)
