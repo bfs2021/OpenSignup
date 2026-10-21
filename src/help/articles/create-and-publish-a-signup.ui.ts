@@ -32,6 +32,8 @@ export const UI = {
   change: 'Change',
   editInBuilder: 'Edit everything in the builder',
   publishFromReview: 'Publish and get the link',
+  // Under those two: sends the email about an unpublished draft now.
+  emailMeLater: 'Not yet. Email me a link to finish later',
   preview: 'Preview',
   publish: 'Publish',
   // Phones: the three-dot button's accessible name, then the item it opens.

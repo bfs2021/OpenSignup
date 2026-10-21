@@ -3,7 +3,8 @@ config({ path: '.env.local' });
 config({ path: '.env' });
 
 import { log } from '@/lib/log';
-import { getBoss, QUEUES, type ReminderSendPayload } from './queue';
+import { dispatchDraftNudges, sendDraftNudgeJob } from './draft-nudges';
+import { getBoss, QUEUES, type DraftNudgeSendPayload, type ReminderSendPayload } from './queue';
 import { dispatchReminders, sendReminderJob } from './reminders';
 import { runHousekeeping } from './housekeeping';
 
@@ -32,6 +33,36 @@ async function main() {
     }
   });
 
+  // The email about an unpublished draft. Same shape as reminders: a scan
+  // queues one send job per due draft, and the send job checks every rule
+  // again, so it is as safe as reminders are with one worker process and no
+  // safer with two (see sendDraftNudgeJob).
+  await boss.work<DraftNudgeSendPayload>(QUEUES.draftNudgeSend, async (jobs) => {
+    for (const job of jobs) {
+      try {
+        await sendDraftNudgeJob(job.data);
+      } catch (err) {
+        log.error({ err, signupId: job.data.signupId }, 'draft email send failed');
+        throw err; // pg-boss retries it, as it does a reminder
+      }
+    }
+  });
+
+  // Every 10 minutes, five minutes off the reminder scan so the two don't run
+  // together. The email is due DRAFT_NUDGE_DELAY_HOURS after a draft is
+  // started, so it goes out within 10 minutes of that; hourly would make "a
+  // few hours" anything up to an hour later, for a query that is cheap either
+  // way (drafts only, created within the last two days).
+  await boss.schedule(QUEUES.draftNudgeDispatch, '5,15,25,35,45,55 * * * *');
+  await boss.work(QUEUES.draftNudgeDispatch, async () => {
+    try {
+      await dispatchDraftNudges();
+    } catch (err) {
+      log.error({ err }, 'draft email dispatch failed');
+      throw err;
+    }
+  });
+
   // Housekeeping: hourly. Reads already ignore expired rows, so a missed run
   // costs disk, never correctness.
   await boss.schedule(QUEUES.housekeeping, '17 * * * *');
@@ -44,7 +75,9 @@ async function main() {
     }
   });
 
-  log.info('signup worker started · reminderDispatch + reminderSend + housekeeping queues online');
+  log.info(
+    'signup worker started · reminderDispatch + reminderSend + draftNudgeDispatch + draftNudgeSend + housekeeping queues online',
+  );
 
   const shutdown = async (signal: string) => {
     log.info({ signal }, 'stopping worker');

@@ -51,6 +51,7 @@ describe('email templates under the worker toolchain', () => {
     expect(stdout).toContain('ok magic-link');
     expect(stdout).toContain('ok commitment-confirmation');
     expect(stdout).toContain('ok reminder');
+    expect(stdout).toContain('ok draft-nudge');
   }, 60_000);
 
   it('ships every tsconfig the worker script needs in the runner image', async () => {

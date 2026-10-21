@@ -26,7 +26,9 @@ the browser:
   including how many places are taken.
 - **Create** a signup with its fields and slots in one go. It starts as a
   draft: participants cannot see it until you publish it, though other people
-  in the same workspace can.
+  in the same workspace can. A draft you start in the browser gets one email a
+  few hours later if you haven't published it; one an assistant creates
+  doesn't, since the assistant gives you its links.
 - **Change** a signup: title, description, tags, closing time, visibility,
   settings, fields, and slots.
 - **Publish, close, archive, or delete** a signup.

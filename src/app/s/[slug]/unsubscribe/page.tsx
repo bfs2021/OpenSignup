@@ -1,5 +1,6 @@
 import { redirect } from 'next/navigation';
 import { FormError } from '@/components/ui/form-error';
+import { UnsubscribeCard } from '@/components/unsubscribe-card';
 import { getDb } from '@/db/client';
 import { unsubscribePath } from '@/lib/links';
 import { previewReminderOptOut } from '@/services/reminder-optout';
@@ -14,17 +15,6 @@ type PageParams = {
   params: Promise<{ slug: string }>;
   searchParams: Promise<{ p?: string; token?: string; done?: 'on' | 'off'; error?: string }>;
 };
-
-function Shell({ title, children }: { title: string; children: React.ReactNode }) {
-  return (
-    <main className="container-tight flex min-h-[100svh] flex-col justify-center gap-4 py-8">
-      <div className="space-y-4 rounded-xl border border-surface-sunk bg-white p-6">
-        <h1 className="text-2xl font-semibold tracking-tight">{title}</h1>
-        {children}
-      </div>
-    </main>
-  );
-}
 
 export default async function UnsubscribePage({ params, searchParams }: PageParams) {
   const { slug } = await params;
@@ -88,7 +78,7 @@ export default async function UnsubscribePage({ params, searchParams }: PagePara
         or give up and mark the mail as spam. `done=off` still earns the
         affirmative wording; without it we say only what the row shows.
       */
-      <Shell title={done === 'off' ? 'Reminders turned off' : 'Reminders are off'}>
+      <UnsubscribeCard title={done === 'off' ? 'Reminders turned off' : 'Reminders are off'}>
         <p className="text-sm text-ink-muted">
           {done === 'off' ? (
             <>
@@ -123,12 +113,12 @@ export default async function UnsubscribePage({ params, searchParams }: PagePara
         <a href={`/s/${target.signupSlug}`} className="text-sm text-brand underline">
           Back to the signup
         </a>
-      </Shell>
+      </UnsubscribeCard>
     );
   }
 
   return (
-    <Shell title={done === 'on' ? 'Reminders turned back on' : 'Stop reminder emails?'}>
+    <UnsubscribeCard title={done === 'on' ? 'Reminders turned back on' : 'Stop reminder emails?'}>
       {error ? (
         <FormError>That didn&apos;t work — nothing has changed. Try again below.</FormError>
       ) : null}
@@ -163,6 +153,6 @@ export default async function UnsubscribePage({ params, searchParams }: PagePara
           Keep them
         </a>
       </form>
-    </Shell>
+    </UnsubscribeCard>
   );
 }

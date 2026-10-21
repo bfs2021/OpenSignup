@@ -3,7 +3,15 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 let appUrl = 'https://signup.example.org';
 vi.mock('./env', () => ({ getEnv: () => ({ NEXT_PUBLIC_APP_URL: appUrl }) }));
 
-const { commitmentLinks, publicSignupUrl, reminderUnsubscribePostUrl } = await import('./links');
+const {
+  builderPageUrl,
+  commitmentLinks,
+  draftEmailUnsubscribePostUrl,
+  draftEmailUnsubscribeUrl,
+  publicSignupUrl,
+  reminderUnsubscribePostUrl,
+  signupPageUrl,
+} = await import('./links');
 
 describe('absolute links', () => {
   beforeEach(() => {
@@ -18,6 +26,26 @@ describe('absolute links', () => {
     appUrl = 'https://signup.example.org/';
     expect(reminderUnsubscribePostUrl('par_1', 'tok')).toBe(
       'https://signup.example.org/api/public/reminder-optout?p=par_1&token=tok',
+    );
+  });
+});
+
+describe('draft email links', () => {
+  beforeEach(() => {
+    appUrl = 'https://signup.example.org';
+  });
+
+  it('opens the review page and the builder', () => {
+    expect(signupPageUrl('sig_1')).toBe('https://signup.example.org/app/signups/sig_1');
+    expect(builderPageUrl('sig_1')).toBe('https://signup.example.org/app/signups/sig_1/build');
+  });
+
+  it('sends a person to the confirm page and a mail provider to the API route', () => {
+    expect(draftEmailUnsubscribeUrl('org_1', 'a+b/c')).toBe(
+      'https://signup.example.org/unsubscribe/drafts?o=org_1&token=a%2Bb%2Fc',
+    );
+    expect(draftEmailUnsubscribePostUrl('org_1', 'tok')).toBe(
+      'https://signup.example.org/api/public/draft-email-optout?o=org_1&token=tok',
     );
   });
 });

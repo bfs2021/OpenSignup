@@ -1,10 +1,11 @@
 import { createElement } from 'react';
 import { getEmailTransport } from './index';
-import { confirmationSubject, reminderSubject } from './subjects';
+import { confirmationSubject, draftNudgeSubject, reminderSubject } from './subjects';
 import {
   CommitmentConfirmationEmail,
   type CommitmentConfirmationEmailProps,
 } from './templates/commitment-confirmation';
+import { DraftNudgeEmail, type DraftNudgeEmailProps } from './templates/draft-nudge';
 import { ReminderEmail, type ReminderEmailProps } from './templates/reminder';
 import { renderEmail } from './render';
 
@@ -38,13 +39,37 @@ export async function sendReminder(
     subject: reminderSubject(props.signupTitle, props.slotSummary),
     html,
     text,
-    ...(opts.unsubscribePostUrl
-      ? {
-          headers: {
-            'List-Unsubscribe': `<${opts.unsubscribePostUrl}>`,
-            'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click',
-          },
-        }
-      : {}),
+    ...oneClickUnsubscribe(opts.unsubscribePostUrl),
   });
+}
+
+/**
+ * The organizer's one email about a draft they haven't published. Carries the
+ * same RFC 8058 headers as a reminder, pointing at the draft-email opt-out
+ * route (`draftEmailUnsubscribePostUrl`), for the same reason.
+ */
+export async function sendDraftNudge(
+  to: string,
+  props: DraftNudgeEmailProps,
+  opts: { unsubscribePostUrl: string },
+) {
+  const { html, text } = await renderEmail(createElement(DraftNudgeEmail, props));
+  return getEmailTransport().send({
+    to,
+    subject: draftNudgeSubject(props.signupTitle),
+    html,
+    text,
+    ...oneClickUnsubscribe(opts.unsubscribePostUrl),
+  });
+}
+
+function oneClickUnsubscribe(postUrl: string | undefined) {
+  return postUrl
+    ? {
+        headers: {
+          'List-Unsubscribe': `<${postUrl}>`,
+          'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click',
+        },
+      }
+    : {};
 }

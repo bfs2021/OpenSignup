@@ -92,6 +92,13 @@
       "when": 1791670592037,
       "tag": "0012_commitment_idempotency_key",
       "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1792541736776,
+      "tag": "0013_organizer_draft_email_optout",
+      "breakpoints": true
     }
   ]
 }

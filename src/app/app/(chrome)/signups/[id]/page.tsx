@@ -2,6 +2,7 @@ import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { after } from 'next/server';
 import { requireOrganizerSession, toActor } from '@/auth/session';
+import { EmailDraftLink } from '@/components/review/EmailDraftLink';
 import { ReviewDetailsCard } from '@/components/review/ReviewDetailsCard';
 import { ReviewSignUpCard } from '@/components/review/ReviewSignUpCard';
 import { ReviewSlotsCard } from '@/components/review/ReviewSlotsCard';
@@ -21,7 +22,7 @@ import {
   sendsReminders,
 } from '@/schemas/signups';
 import { loadSignupForOrganizer } from '@/services/signups.cached';
-import { publishAction } from './actions';
+import { emailDraftLinkAction, publishAction } from './actions';
 import { signupMetadata } from './signup-metadata';
 
 type PageProps = {
@@ -165,6 +166,7 @@ export default async function SignupPage({ params, searchParams }: PageProps) {
         >
           Edit everything in the builder
         </Link>
+        <EmailDraftLink action={emailDraftLinkAction.bind(null, id)} />
       </div>
     </div>
   );

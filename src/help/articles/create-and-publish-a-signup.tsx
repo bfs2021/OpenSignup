@@ -1,3 +1,4 @@
+import { DRAFT_NUDGE_DELAY_HOURS } from '@/lib/draft-nudge';
 import { REMINDER_SETTLE_HOURS } from '@/lib/reminder-eligibility';
 import { INSTANCE_NAME } from '@/lib/site-config';
 import { REMINDER_BEFORE } from '@/schemas/signups';
@@ -8,6 +9,8 @@ export { UI };
 
 // A sign-up newer than this isn't picked up yet (src/jobs/reminders.ts).
 const SETTLE = REMINDER_SETTLE_HOURS === 1 ? 'an hour' : `${REMINDER_SETTLE_HOURS} hours`;
+// When the email about an unpublished draft goes out (src/jobs/draft-nudges.ts).
+const NUDGE = DRAFT_NUDGE_DELAY_HOURS === 1 ? 'an hour' : `${DRAFT_NUDGE_DELAY_HOURS} hours`;
 
 export function CreateAndPublishASignup() {
   return (
@@ -159,6 +162,11 @@ export function CreateAndPublishASignup() {
             </p>
           </Step>
         </Steps>
+        <p>
+          If you don&apos;t publish a draft, we email you a link back to it {NUDGE} after you
+          started it. We send it once, and not for a draft an AI assistant made for you. To get the
+          link now, choose <Ui>{UI.emailMeLater}</Ui>.
+        </p>
       </section>
 
       <section className="space-y-4">

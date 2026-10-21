@@ -6,10 +6,18 @@ import { workspaceMembers } from '@/db/schema/members';
 import { organizers } from '@/db/schema/organizers';
 import { signups } from '@/db/schema/signups';
 import { workspaces } from '@/db/schema/workspaces';
+import { getEmailTransport } from '@/email';
 import { makeId } from '@/lib/ids';
 import type { Actor } from '@/lib/policy';
+import { chargeRateLimit, RateLimits } from '@/lib/rate-limit';
+import { DEFAULT_TEMPLATE } from '@/lib/signup-templates';
 import { createSignup } from '@/services/signups';
-import { deleteSignupAction, publishAction, setRequireEmailAction } from './actions';
+import {
+  deleteSignupAction,
+  emailDraftLinkAction,
+  publishAction,
+  setRequireEmailAction,
+} from './actions';
 
 // The action reads the organizer from the session cookie. Tests hand it one
 // directly instead of going through Auth.js.
@@ -159,6 +167,101 @@ describe('setRequireEmailAction (db)', () => {
       `/app/signups/sig_nope/settings?error=${encodeURIComponent('No longer available.')}`,
     );
     expect(revalidatePath).not.toHaveBeenCalled();
+  });
+});
+
+// The review page's "Not yet. Email me a link to finish later".
+describe('emailDraftLinkAction (db)', () => {
+  const db = getDb();
+  const organizerId = makeId('org');
+  const workspaceId = makeId('ws');
+  const slug = `test-${workspaceId.slice(-8).toLowerCase()}`;
+  const email = `${slug}@example.test`;
+  const owner: Actor = {
+    kind: 'organizer',
+    id: organizerId,
+    email,
+    workspaceIds: [workspaceId],
+    workspaceRoles: { [workspaceId]: 'owner' },
+  };
+  let signupId: string;
+
+  beforeAll(async () => {
+    await db.transaction(async (tx) => {
+      await tx.insert(organizers).values({ id: organizerId, email, name: 'Test Org' });
+      await tx.insert(workspaces).values({
+        id: workspaceId,
+        slug,
+        name: 'Test Workspace',
+        type: 'personal',
+        plan: 'free',
+      });
+    });
+    const created = await createSignup(
+      db,
+      owner,
+      workspaceId,
+      { title: 'Email me later', description: '', tags: [], visibility: 'unlisted', settings: {} },
+      {
+        template: {
+          ...DEFAULT_TEMPLATE,
+          slots: [{ capacity: 2, values: { what: 'Fruit and water' } }],
+        },
+      },
+    );
+    if (!created.ok) throw new Error(created.error.message);
+    signupId = created.value.id;
+  });
+
+  afterAll(async () => {
+    await db.delete(workspaces).where(eq(workspaces.id, workspaceId));
+    await db.delete(organizers).where(eq(organizers.id, organizerId));
+  });
+
+  beforeEach(() => {
+    revalidatePath.mockClear();
+  });
+
+  it('sends the email and says so in place, without reloading the page', async () => {
+    session.actor = owner;
+    const send = vi.spyOn(getEmailTransport(), 'send');
+    try {
+      expect(await emailDraftLinkAction(signupId, null, new FormData())).toEqual({ sent: true });
+      expect(send).toHaveBeenCalledTimes(1);
+      expect(send.mock.calls[0]?.[0].to).toBe(email);
+    } finally {
+      send.mockRestore();
+    }
+    expect(revalidatePath).not.toHaveBeenCalled();
+  });
+
+  it('stops after a few in an hour, sending nothing', async () => {
+    session.actor = owner;
+    // The first test spent one; spend the rest of the hour's quota.
+    for (let i = 1; i < RateLimits.draftEmailPerOrganizer.max; i++) {
+      await chargeRateLimit(db, RateLimits.draftEmailPerOrganizer, organizerId);
+    }
+    const send = vi.spyOn(getEmailTransport(), 'send');
+    try {
+      const state = await emailDraftLinkAction(signupId, null, new FormData());
+      expect(state).toEqual({ error: expect.stringMatching(/^You’ve asked for a few already/) });
+      expect(send).not.toHaveBeenCalled();
+    } finally {
+      send.mockRestore();
+    }
+  });
+
+  it('refuses a viewer in plain words', async () => {
+    session.actor = {
+      kind: 'organizer',
+      id: makeId('org'),
+      email: 'viewer@example.test',
+      workspaceIds: [workspaceId],
+      workspaceRoles: { [workspaceId]: 'viewer' },
+    };
+    expect(await emailDraftLinkAction(signupId, null, new FormData())).toEqual({
+      error: 'You don’t have edit access.',
+    });
   });
 });
 

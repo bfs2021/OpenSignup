@@ -43,7 +43,7 @@ pnpm dev               # http://localhost:3000
 
 Open `http://localhost:3000` and sign in with any email address. Nothing is sent: with `EMAIL_TRANSPORT=console`, the sign-in email is printed in the `pnpm dev` terminal.
 
-Reminder emails need the worker. Run it in a second terminal:
+Reminder emails, and the email about a draft nobody has published, need the worker. Run it in a second terminal:
 
 ```bash
 pnpm worker
@@ -91,7 +91,7 @@ You can run the image from the `Dockerfile` on any container host, or run the ap
 
 - `pnpm db:migrate`, before the first start and after each update. It prepares the database.
 - The web app: `node server.js` in the image, or `pnpm build` and then `pnpm start` from the source code.
-- `pnpm worker`, which sends reminder emails. It runs next to the web app, as a second process. Run exactly one: two workers can send the same reminder twice.
+- `pnpm worker`, which sends reminder emails and the one email an organizer gets about a draft they haven't published. It runs next to the web app, as a second process. Run exactly one: two workers can send the same email twice.
 
 All settings are environment variables, listed in `.env.example`. For Fly.io, start from `fly.example.toml`.
 

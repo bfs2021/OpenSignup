@@ -8,6 +8,9 @@ declare global {
 export const QUEUES = {
   reminderDispatch: 'reminders.dispatch',
   reminderSend: 'reminders.send',
+  /** Every 10 minutes: the drafts whose one email has come due (`./draft-nudges.ts`). */
+  draftNudgeDispatch: 'draft-nudges.dispatch',
+  draftNudgeSend: 'draft-nudges.send',
   /** Hourly deletion of expired OAuth records and closed rate-limit windows. */
   housekeeping: 'housekeeping.sweep',
 } as const;
@@ -31,4 +34,8 @@ export async function getBoss(): Promise<PgBoss> {
 
 export interface ReminderSendPayload {
   commitmentId: string;
+}
+
+export interface DraftNudgeSendPayload {
+  signupId: string;
 }

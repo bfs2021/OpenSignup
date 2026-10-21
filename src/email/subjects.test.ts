@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { confirmationSubject, reminderSubject } from './subjects';
+import { confirmationSubject, draftNudgeSubject, reminderSubject } from './subjects';
 
 describe('email subjects', () => {
   it('leads with the signup title, then the slot values', () => {
@@ -14,5 +14,11 @@ describe('email subjects', () => {
   it('omits the separator when the slot has nothing to summarise', () => {
     expect(confirmationSubject('Bake Sale', '')).toBe("You're signed up: Bake Sale");
     expect(reminderSubject('Bake Sale', '')).toBe('Reminder: Bake Sale');
+  });
+
+  it('names the draft an organizer has not published', () => {
+    expect(draftNudgeSubject('Snack duty — Spring season')).toBe(
+      'Ready to publish: Snack duty — Spring season',
+    );
   });
 });

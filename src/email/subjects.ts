@@ -1,5 +1,5 @@
 /**
- * Subject lines for participant email, shared with the templates so the
+ * Subject lines for participant and organizer email, shared with the templates so the
  * subject and the in-body preview text can never drift apart.
  *
  * The signup title comes first because that is what identifies the email in a
@@ -19,4 +19,9 @@ export function confirmationSubject(signupTitle: string, slotSummary: string): s
 
 export function reminderSubject(signupTitle: string, slotSummary: string): string {
   return withSummary('Reminder', signupTitle, slotSummary);
+}
+
+/** The organizer's one email about a draft they haven't published. */
+export function draftNudgeSubject(signupTitle: string): string {
+  return `Ready to publish: ${signupTitle}`;
 }

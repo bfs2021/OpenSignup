@@ -1,0 +1,1 @@
+ALTER TABLE "organizers" ADD COLUMN "draft_emails_opted_out_at" timestamp with time zone;

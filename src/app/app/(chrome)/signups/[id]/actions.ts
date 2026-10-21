@@ -4,9 +4,14 @@ import { redirect } from 'next/navigation';
 import { revalidatePath } from 'next/cache';
 import { getDb } from '@/db/client';
 import { requireOrganizerSession, toActor } from '@/auth/session';
+import type { EmailDraftLinkState } from '@/components/review/EmailDraftLink';
 import { SAVE_ERROR_MESSAGE } from '@/components/ui/save-notice';
 import { ServiceException, type ErrorCode } from '@/lib/errors';
+import { log } from '@/lib/log';
+import { requireOrganizerId } from '@/lib/policy';
+import { chargeRateLimit, RateLimits } from '@/lib/rate-limit';
 import { removeCommitment } from '@/services/commitments';
+import { emailDraftLink } from '@/services/draft-nudge';
 import { closeSignup, deleteSignup, publishSignup, updateSignup } from '@/services/signups';
 import { removeRefusal } from './remove-refusal';
 
@@ -29,6 +34,43 @@ export async function publishAction(signupId: string) {
   revalidateSignup(signupId);
   if (result.ok) {
     redirect(`/app/signups/${signupId}/share`);
+  }
+}
+
+/**
+ * The review page's "Not yet. Email me a link to finish later": sends the
+ * draft email to the organizer now (`emailDraftLink`), metered per organizer,
+ * and says how it went in place. Revalidates nothing: the page has not
+ * changed, and a re-render would count as another view of it.
+ */
+export async function emailDraftLinkAction(
+  signupId: string,
+  _state: EmailDraftLinkState,
+  _form: FormData,
+): Promise<EmailDraftLinkState> {
+  const actor = await requireActor();
+  try {
+    const db = getDb();
+    const retryAfter = await chargeRateLimit(
+      db,
+      RateLimits.draftEmailPerOrganizer,
+      requireOrganizerId(actor),
+    );
+    if (retryAfter !== null) {
+      const minutes = Math.max(1, Math.ceil(retryAfter / 60));
+      return {
+        error: `You’ve asked for a few already. Try again in ${minutes === 1 ? 'a minute' : `${minutes} minutes`}.`,
+      };
+    }
+    const result = await emailDraftLink(db, actor, signupId);
+    if (!result.ok) return { error: SAVE_ERROR_MESSAGE[result.error.code] };
+    return { sent: true };
+  } catch (e) {
+    // The policy guard throws rather than returning: a viewer's role.
+    if (e instanceof ServiceException) return { error: SAVE_ERROR_MESSAGE[e.serviceError.code] };
+    // The mail transport, most likely. The organizer can try again.
+    log.error({ err: e, signupId }, 'draft email request failed');
+    return { error: 'That didn’t send. Try again in a moment.' };
   }
 }
 

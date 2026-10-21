@@ -123,6 +123,49 @@ without one has not always had a send fail.
 The opt-out rows are written only when the setting changes, so a repeated
 unsubscribe adds nothing.
 
+### Draft email
+
+| event | actor | payload | fired from |
+|---|---|---|---|
+| `draft.nudge_sent` | system for the scheduled email; organizer when they asked for it | `{ channel: 'email', trigger: 'scheduled' \| 'requested' }` (`requested` is "Not yet. Email me a link to finish later" on the draft's review page) | `jobs/draft-nudges.ts` (`scheduled`), `services/draft-nudge.ts` (`requested`) |
+| `draft_email.opted_out` | organizer | `{}` | `services/draft-email-optout.ts`, from the email's unsubscribe link or the mail provider's one-click unsubscribe |
+| `draft_email.opted_in` | organizer | `{}` | `services/draft-email-optout.ts`, from the unsubscribe page, turning the email back on |
+
+An organizer gets one email about a draft they haven't published, a few hours
+after starting it (`DRAFT_NUDGE_DELAY_HOURS` in `src/lib/draft-nudge.ts`, 3).
+A scan every 10 minutes (`draft-nudges.dispatch`) finds the drafts that are
+due and queues one `draft-nudges.send` job each: still a draft, not deleted,
+started between 3 and 48 hours ago, with a slot that has something filled in,
+not created through a connected AI assistant (`signup.created` with
+`templateId: 'mcp'`), its organizer not opted out, and no `draft.nudge_sent`
+row yet. The send job asks all of that again before it sends, and the
+`draft.nudge_sent` row it then writes is what keeps the draft from being
+picked again. A requested send writes the same row, so the scheduled one
+doesn't follow it. Like reminders, this holds only with one worker process.
+A failed send writes nothing here: pg-boss retries it, the worker logs
+`draft email send failed`, and the job shows as a failed `draft-nudges.send`
+in `pgboss.job` (`data->>'signupId'` names the signup).
+
+`draft.nudge_sent` has the signup and its workspace set. The opt-out rows have
+neither: the switch is the organizer's own and covers every draft they start,
+in any workspace. Like the reminder opt-out rows, they are written only when
+the setting changes.
+
+```sql
+-- Drafts emailed in the last 30 days, and how many have been published since.
+-- Distinct signups: an organizer can ask for the email more than once.
+SELECT
+  a.payload->>'trigger' AS trigger,
+  count(DISTINCT a.signup_id) AS emailed,
+  count(DISTINCT a.signup_id) FILTER (WHERE s.status <> 'draft') AS published_since
+FROM activity a
+JOIN signups s ON s.id = a.signup_id
+WHERE a.workspace_id = $1
+  AND a.event_type = 'draft.nudge_sent'
+  AND a.occurred_at >= now() - interval '30 days'
+GROUP BY 1;
+```
+
 ### Marketing / acquisition
 
 | event | actor | payload | fired from |
@@ -374,7 +417,10 @@ edits, `auth.signed_in`, **and** the organizer-side RSC pageview events
 (`signup.editor_opened`, `signup.previewed`, `signup.draft_started`, and the
 Build tab's `signup.viewed`) which are written with the organizer as actor,
 and the organizer's telemetry rows (`signup.publish_refused`,
-`signup.link_copied`, `signup.link_shared`, `magic_compose.failed`, `review.notice_shown`).
+`signup.link_copied`, `signup.link_shared`, `magic_compose.failed`,
+`review.notice_shown`). So do a requested `draft.nudge_sent` and the
+`draft_email.*` opt-out rows, which are written from the email's link without
+a sign-in; the scheduled `draft.nudge_sent` is system-actor and does not.
 The public page's `signup.viewed` is system-actor and does not advance
 `last_active_at`.
 
@@ -386,8 +432,8 @@ The public page's `signup.viewed` is system-actor and does not advance
 - Email delivery, bounce, or complaint events — would require a Resend
   webhook handler. Not implemented. What is recorded is that the mail
   transport accepted a message: `auth.magic_link_sent`,
-  `commitment.confirmation_sent` and `reminder.sent`. A send that fails
-  writes no row and shows up only in the server or worker log.
+  `commitment.confirmation_sent`, `reminder.sent` and `draft.nudge_sent`. A
+  send that fails writes no row and shows up only in the server or worker log.
 - HTTP errors and Web Vitals — these belong in pino + Sentry, not the
   activity log. Sentry env stubs (`SENTRY_DSN`) exist in `src/lib/env.ts`
   but are not yet wired up; see Task 2.8 in the internal v1 build plan

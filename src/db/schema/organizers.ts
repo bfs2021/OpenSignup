@@ -18,6 +18,12 @@ export const organizers = pgTable(
     defaultWorkspaceId: text('default_workspace_id'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     lastActiveAt: timestamp('last_active_at', { withTimezone: true }).notNull().defaultNow(),
+    /**
+     * When the organizer turned off the email about a draft they haven't
+     * published (`src/services/draft-email-optout.ts`), or null while it is on.
+     * One switch for all their drafts.
+     */
+    draftEmailsOptedOutAt: timestamp('draft_emails_opted_out_at', { withTimezone: true }),
   },
   (t) => ({
     emailIdx: index('organizers_email_idx').on(t.email),

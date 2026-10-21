@@ -113,6 +113,15 @@ export const RateLimits = {
   // participant lookup, so a bogus request costs this bucket's own upsert and
   // an HMAC, nothing more.
   reminderOptOutPerIp: { bucket: 'reminder.optout.ip', max: 300, windowSeconds: 3600 },
+  // The organizer's switch for the email about an unpublished draft: the same
+  // unauthenticated, token-guarded shape as reminderOptOutPerIp, posted from
+  // the same few provider egress IPs, so it is sized the same way for the same
+  // reasons. A wrong token is rejected before the organizer lookup.
+  draftEmailOptOutPerIp: { bucket: 'draft_email.optout.ip', max: 300, windowSeconds: 3600 },
+  // "Email me a link to finish later" on a draft's review page. It emails only
+  // the signed-in organizer's own address, so this bounds a script on a stolen
+  // session rather than mail to strangers. A person asks once or twice.
+  draftEmailPerOrganizer: { bucket: 'draft_email.organizer', max: 5, windowSeconds: 3600 },
   // Unauthenticated writes into the append-only activity log.
   telemetryPerIp: { bucket: 'telemetry.ip', max: 30, windowSeconds: 3600 },
   // OAuth token endpoint: authorization-code exchange and refresh. The main

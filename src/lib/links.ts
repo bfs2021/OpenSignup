@@ -29,6 +29,11 @@ export function signupPageUrl(signupId: string): string {
   return absoluteUrl(`/app/signups/${signupId}`);
 }
 
+/** A signup's Build tab, absolute for an email. */
+export function builderPageUrl(signupId: string): string {
+  return absoluteUrl(`/app/signups/${signupId}/build`);
+}
+
 /** The organizer's preview of the public page, which works while the signup is still a draft. */
 export function previewPageUrl(signupId: string): string {
   return absoluteUrl(`/app/signups/${signupId}/preview`);
@@ -80,4 +85,29 @@ export function reminderUnsubscribeUrl(slug: string, participantId: string, toke
  */
 export function reminderUnsubscribePostUrl(participantId: string, token: string): string {
   return absoluteUrl(`/api/public/reminder-optout?p=${participantId}&token=${token}`);
+}
+
+/**
+ * The confirm page for turning off the email about an unpublished draft, as a
+ * path: the email links to it and the opt-out route sends people back to it.
+ * One switch per organizer, so it names the organizer, not a signup.
+ */
+export function draftEmailUnsubscribePath(organizerId: string, token: string): string {
+  return `/unsubscribe/drafts?o=${encodeURIComponent(organizerId)}&token=${encodeURIComponent(token)}`;
+}
+
+/** Human-visible link in the draft email: lands on a confirm page, opts out only on submit. */
+export function draftEmailUnsubscribeUrl(organizerId: string, token: string): string {
+  return absoluteUrl(draftEmailUnsubscribePath(organizerId, token));
+}
+
+/**
+ * The draft email's `List-Unsubscribe` / RFC 8058 one-click target. The API
+ * route, never the confirm page, for the reason `reminderUnsubscribePostUrl`
+ * gives.
+ */
+export function draftEmailUnsubscribePostUrl(organizerId: string, token: string): string {
+  return absoluteUrl(
+    `/api/public/draft-email-optout?o=${encodeURIComponent(organizerId)}&token=${encodeURIComponent(token)}`,
+  );
 }

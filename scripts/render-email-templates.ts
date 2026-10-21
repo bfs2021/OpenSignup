@@ -12,6 +12,7 @@
 import { createElement, type ReactElement } from 'react';
 import { renderEmail } from '@/email/render';
 import { CommitmentConfirmationEmail } from '@/email/templates/commitment-confirmation';
+import { DraftNudgeEmail } from '@/email/templates/draft-nudge';
 import { MagicLinkEmail } from '@/email/templates/magic-link';
 import { ReminderEmail } from '@/email/templates/reminder';
 
@@ -56,18 +57,31 @@ const cases: Array<[string, ReactElement]> = [
       notes: 'Bringing grapes',
     }),
   ],
+  [
+    'draft-nudge',
+    createElement(DraftNudgeEmail, {
+      signupTitle: 'Saturday Snack Rotation',
+      headline: '12 slots · 3 days · 3 people each',
+      reviewUrl: 'https://example.test/app/signups/sig_1',
+      builderUrl: 'https://example.test/app/signups/sig_1/build',
+      unsubscribeUrl: 'https://example.test/unsubscribe/drafts?o=org_1&token=abc',
+      requested: false,
+    }),
+  ],
 ];
 
 /**
- * A distinctive string each template must put in its output. Asserting on real
+ * Distinctive strings each template must put in its output. Asserting on real
  * rendered content rather than "not empty" is what makes the guard notice a
  * template that renders but drops a section — e.g. after gaining a prop the
  * fixture above does not supply.
  */
-const expected: Record<string, string> = {
-  'magic-link': 'https://example.test/login/confirm?token=abc',
-  'commitment-confirmation': 'https://example.test/s/snacks/c/com_1?token=abc',
-  reminder: 'Sat, Sep 5',
+const expected: Record<string, string[]> = {
+  'magic-link': ['https://example.test/login/confirm?token=abc'],
+  'commitment-confirmation': ['https://example.test/s/snacks/c/com_1?token=abc'],
+  reminder: ['Sat, Sep 5'],
+  // The "So far" headline, the button, and the opt-out link.
+  'draft-nudge': ['3 days', 'Check it and publish', 'Stop emails about unpublished drafts'],
 };
 
 async function main(): Promise<void> {
@@ -76,16 +90,18 @@ async function main(): Promise<void> {
     if (!html.trim() || !text.trim()) {
       throw new Error(`${name} rendered empty output`);
     }
-    const needle = expected[name];
-    if (needle === undefined) {
+    const needles = expected[name];
+    if (needles === undefined) {
       throw new Error(`${name} has no expected-content entry; add one`);
     }
     for (const [format, body] of [
       ['html', html],
       ['text', text],
     ] as const) {
-      if (!body.includes(needle)) {
-        throw new Error(`${name} ${format} output is missing ${JSON.stringify(needle)}`);
+      for (const needle of needles) {
+        if (!body.includes(needle)) {
+          throw new Error(`${name} ${format} output is missing ${JSON.stringify(needle)}`);
+        }
       }
     }
     console.log(`ok ${name}`);

@@ -39,7 +39,8 @@
     "eval:mcp": "tsx scripts/eval-mcp.ts",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "reminders:due": "tsx scripts/dev-reminders.ts"
+    "reminders:due": "tsx scripts/dev-reminders.ts",
+    "drafts:due": "tsx scripts/dev-draft-nudges.ts"
   },
   "dependencies": {
     "@auth/drizzle-adapter": "^1.11.3",

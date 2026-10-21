@@ -1,5 +1,6 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
+import { DRAFT_NUDGE_DELAY_HOURS } from '@/lib/draft-nudge';
 import {
   INSTANCE_NAME,
   SOURCE_DISPLAY,
@@ -51,16 +52,21 @@ export default function PrivacyPage() {
           sign-in such as Google. We store:
         </p>
         <ul className="list-disc space-y-1 pl-6">
-          <li>Email address (used to send magic-link sign-in emails).</li>
+          <li>
+            Email address (used to send magic-link sign-in emails, and the one email about a signup
+            you started but haven&apos;t published).
+          </li>
           <li>Optional display name and organization name.</li>
           <li>The signups, slots, and settings you create.</li>
+          <li>Whether you have turned off emails about unpublished drafts, and when.</li>
           <li>
             An append-only activity log of organizer actions (sign-ins, creating and editing
             signups, sending magic links, copying or sharing a signup&rsquo;s link but not where it
             went, a publish or an AI draft that didn&rsquo;t go through), which of your own pages
             you open and whether on a phone or a computer (never the browser&rsquo;s full
             identifying string), which kinds of problem the review page pointed out in a draft
-            (never the values themselves), participant commitments on your signups, and reminder dispatches.
+            (never the values themselves), participant commitments on your signups, reminder
+            dispatches, the emails we send you about a draft, and turning those emails off or on.
             This exists so an organizer can audit what happened in their own workspace, so the
             operator can investigate abuse, and so the operator can count, in aggregate, where
             organizers get stuck between starting a signup and sharing it. The same log records
@@ -135,10 +141,23 @@ export default function PrivacyPage() {
       <section className="space-y-3">
         <h2 className="text-xl font-semibold tracking-tight">Email delivery</h2>
         <p>
-          {INSTANCE_NAME} sends three kinds of email: organizer magic-link sign-in emails, a
-          confirmation to a participant when they commit to a slot, and a reminder before a dated
-          slot. A participant gets these only if they gave an email address. Moving to a different
-          slot gives your sign-up a new private link, and sends a fresh confirmation with it. The
+          {INSTANCE_NAME} sends four kinds of email: organizer magic-link sign-in emails, one email
+          to an organizer about a signup they started but haven&apos;t published, a confirmation to
+          a participant when they commit to a slot, and a reminder before a dated slot.
+        </p>
+        <p>
+          The email about an unpublished draft goes out once per draft, about{' '}
+          {DRAFT_NUDGE_DELAY_HOURS} hours after you start it, and only if it is still a draft with
+          something filled in. It links back to the draft. We don&apos;t send it for a signup a
+          connected AI assistant created for you. You can also ask for it on the draft&apos;s page,
+          and then it comes straight away instead. Each one carries a link that turns these emails
+          off for all your drafts; we record when you turned them off. Sign-in emails are not
+          affected.
+        </p>
+        <p>
+          A participant gets a confirmation and reminders only if they gave an email address.
+          Moving to a different slot gives your sign-up a new private link, and sends a fresh
+          confirmation with it. The
           old link then leads to the new one. Confirmations and reminders each contain a private
           link that lets you change or cancel that commitment without signing in, so treat them as
           you would a password and don&apos;t forward them. Reminders go out the day before the slot;

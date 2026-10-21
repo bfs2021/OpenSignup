@@ -130,6 +130,8 @@ test.describe('help: create and publish your first signup', () => {
         .getByRole('button', { name: new RegExp(`^${UI.change}`) }),
     ).toBeVisible();
     await expect(page.getByRole('button', { name: UI.publishFromReview })).toBeVisible();
+    // Not pressed: it sends an email, and the article only names it.
+    await expect(page.getByRole('button', { name: UI.emailMeLater })).toBeVisible();
     // The three cards, without the page's heading and buttons around them.
     await shot(page, page.locator('main ol'), 'check-your-signup');
     // Change opens the card's form, with Save; Cancel closes it.
