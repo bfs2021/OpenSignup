@@ -51,3 +51,64 @@ export const SlotUpdateInputSchema = z
   })
   .strict();
 export type SlotUpdateInput = z.infer<typeof SlotUpdateInputSchema>;
+
+// One merge takes in at most as many slots as one bulk add makes.
+const MAX_MERGE_SLOTS = 500;
+
+const CapacitySchema = z.number().int().positive().nullable();
+
+/**
+ * Merge copies of a slot into one (issue #503): `keepSlotId` stays and takes
+ * the copies' total capacity, and every other slot in `slotIds` is deleted.
+ * `values`, when sent, replaces the kept slot's values, for numbered rows
+ * ("Helper 1", "Helper 2") that become one "Helper" slot.
+ */
+export const SlotMergeInputSchema = z
+  .object({
+    keepSlotId: z.string().min(1),
+    slotIds: z.array(z.string().min(1)).min(2).max(MAX_MERGE_SLOTS),
+    values: SlotValuesSchema.optional(),
+  })
+  .strict()
+  .superRefine((input, ctx) => {
+    const seen = new Set<string>();
+    for (const [index, id] of input.slotIds.entries()) {
+      if (seen.has(id)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['slotIds', index],
+          message: `slot ${id} is listed more than once`,
+        });
+      }
+      seen.add(id);
+    }
+    if (!seen.has(input.keepSlotId)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['keepSlotId'],
+        message: 'keepSlotId must be one of slotIds',
+      });
+    }
+  });
+
+/**
+ * What undoes a merge, as `mergeSlots` returns it: the kept slot's values and
+ * capacity before the merge, and the slots it deleted, in the order they were
+ * shown.
+ */
+export const SlotUnmergeInputSchema = z.object({
+  keepSlotId: z.string().min(1),
+  previous: z.object({ values: SlotValuesSchema, capacity: CapacitySchema }),
+  restored: z
+    .array(
+      z.object({
+        values: SlotValuesSchema,
+        capacity: CapacitySchema,
+        sortOrder: SortOrderSchema,
+        status: z.enum(SLOT_STATUSES).default('open'),
+      }),
+    )
+    .min(1)
+    .max(MAX_MERGE_SLOTS - 1),
+});
+export type SlotUnmergeInput = z.infer<typeof SlotUnmergeInputSchema>;

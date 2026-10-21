@@ -52,6 +52,8 @@ export const ACTIVITY_EVENTS = [
   'slot.updated',
   'slot.deleted',
   'slot.reordered',
+  'slot.merged',
+  'slot.unmerged',
   'field.created',
   'field.updated',
   'field.reordered',

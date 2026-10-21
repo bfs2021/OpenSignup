@@ -10,6 +10,7 @@ import { requireWorkspaceWrite, type Actor } from '@/lib/policy';
 import { err, ok, type Result } from '@/lib/result';
 import { toSlug } from '@/lib/slug';
 import {
+  type SlotStatus,
   type SlotUpdateInput,
   SlotBulkInputSchema,
   SlotCreateInputSchema,
@@ -74,22 +75,14 @@ export async function addSlot(
     // also overflow the int column in 2038.
     const sortOrder = data.sortOrder ?? (await nextSlotSortOrder(tx, signupId));
 
-    const ref = await pickAvailableRef(tx, signupId, summarizeValues(data.values));
-    const [inserted] = await tx
-      .insert(slots)
-      .values({
-        id: makeId('slot'),
-        signupId,
-        workspaceId: signupRow.workspaceId,
-        ref,
-        values: data.values,
-        capacity: data.capacity ?? null,
-        sortOrder,
-        slotAt,
-        status: 'open',
-      })
-      .returning();
-    if (!inserted) throw new Error('slot insert failed');
+    const inserted = await insertSlot(tx, {
+      signupId,
+      workspaceId: signupRow.workspaceId,
+      values: data.values,
+      capacity: data.capacity ?? null,
+      sortOrder,
+      slotAt,
+    });
 
     await recordActivity(tx, {
       signupId,
@@ -174,23 +167,16 @@ export async function addSlotsBulk(
     }
     const out: SlotRow[] = [];
     for (const [index, row] of data.rows.entries()) {
-      const slotAt = extractSlotAt(settings, fields, row.values);
-      const ref = await pickAvailableRef(tx, signupId, summarizeValues(row.values));
-      const [created] = await tx
-        .insert(slots)
-        .values({
-          id: makeId('slot'),
+      out.push(
+        await insertSlot(tx, {
           signupId,
           workspaceId: signupRow.workspaceId,
-          ref,
           values: row.values,
           capacity: row.capacity ?? null,
           sortOrder: row.sortOrder ?? Math.min(base + index, MAX_SORT_ORDER),
-          slotAt,
-          status: 'open',
-        })
-        .returning();
-      if (created) out.push(created);
+          slotAt: extractSlotAt(settings, fields, row.values),
+        }),
+      );
     }
 
     if (shown) {
@@ -219,6 +205,34 @@ export async function addSlotsBulk(
     });
     return ok(out);
   });
+}
+
+/**
+ * Insert one slot with a new id and a ref made from its values, and return
+ * the row: the insert behind `addSlot`, `addSlotsBulk`, and `unmergeSlots`
+ * putting merged slots back. The caller holds the signup lock, has checked
+ * the values against the fields read under it, and worked out `slotAt` from
+ * them.
+ */
+export async function insertSlot(
+  tx: Queryable,
+  row: {
+    signupId: string;
+    workspaceId: string | null;
+    values: Record<string, unknown>;
+    capacity: number | null;
+    sortOrder: number;
+    slotAt: Date | null;
+    status?: SlotStatus;
+  },
+): Promise<SlotRow> {
+  const ref = await pickAvailableRef(tx, row.signupId, summarizeValues(row.values));
+  const [inserted] = await tx
+    .insert(slots)
+    .values({ ...row, id: makeId('slot'), ref, status: row.status ?? 'open' })
+    .returning();
+  if (!inserted) throw new Error('slot insert failed');
+  return inserted;
 }
 
 /**
