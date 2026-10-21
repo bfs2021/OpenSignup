@@ -331,6 +331,11 @@ test.describe('help: create and publish your first signup', () => {
     });
     expect(created.ok()).toBe(true);
     const id = (await created.json()).data.id as string;
+    // Grouped by date, as the builder groups it, so a new date moves a slot.
+    const grouped = await page.request.patch(`/api/signups/${id}`, {
+      data: { settings: { groupByFieldRefs: ['date'] } },
+    });
+    expect(grouped.ok()).toBe(true);
     for (const slot of [
       { values: { what: 'Fruit and water', date: '2030-04-06' }, capacity: 2 },
       { values: { what: 'Napkins', date: '2030-04-13' }, capacity: 2 },
@@ -342,6 +347,7 @@ test.describe('help: create and publish your first signup', () => {
     await page.goto(`/app/signups/${id}`);
     await expect(page.getByRole('heading', { name: UI.reviewHeading })).toBeVisible();
     const editor = page.locator('[data-testid^="slot-editor-"]');
+    const saved = page.locator('#slots').getByRole('status');
 
     // "To change a slot, choose it."
     const fruit = page.getByRole('button', { name: /^Edit slot — Fruit and water/ });
@@ -358,12 +364,22 @@ test.describe('help: create and publish your first signup', () => {
     await editor.getByRole('spinbutton', { name: UI.capacity }).fill('3');
     await editor.getByRole('button', { name: UI.done }).click();
     await expect(editor).toHaveCount(0);
-    await expect(page.getByRole('status').filter({ hasText: UI.saved })).toBeVisible();
+    await expect(saved).toHaveText(UI.saved);
     await expect(fruit).toContainText('3 people');
     await expect(fruit).toBeFocused();
     // Saved, not only shown.
     await page.reload();
     await expect(fruit).toContainText('3 people');
+
+    // A new date moves the slot to that date's group, as a new row.
+    await fruit.click();
+    await editor.getByLabel(`${UI.date} value`).fill('2030-04-13');
+    await editor.getByRole('button', { name: UI.done }).click();
+    await expect(editor).toHaveCount(0);
+    await expect(fruit).toHaveAccessibleName(/Sat, Apr 13$/);
+    await expect(fruit).toHaveAttribute('aria-expanded', 'false');
+    await expect(saved).toHaveText(UI.saved);
+    await expect(fruit).toBeFocused();
 
     // "To close it without saving, choose Cancel."
     const napkins = page.getByRole('button', { name: /^Edit slot — Napkins/ });
@@ -371,6 +387,7 @@ test.describe('help: create and publish your first signup', () => {
     await editor.getByRole('textbox', { name: `${UI.what} value` }).fill('Cups');
     await editor.getByRole('button', { name: UI.cancel }).click();
     await expect(editor).toHaveCount(0);
+    await expect(napkins).toBeFocused();
     await page.reload();
     await expect(napkins).toBeVisible();
     await expect(page.getByRole('button', { name: /^Edit slot — Cups/ })).toHaveCount(0);

@@ -4,6 +4,7 @@ import type { SlotFieldDefinition, SlotFieldConfig } from '@/schemas/slot-fields
 import type { SignupSettings } from '@/schemas/signups';
 import type { ErrorCode } from '@/lib/errors';
 import { resolveAnchorRef } from '@/lib/reminder-fields';
+import { toBuildFields } from './buildFields';
 import { toSlotValues, toStringValues } from './slotValues';
 
 // ---------------------------------------------------------------------------
@@ -193,16 +194,6 @@ const TITLE_TOO_SHORT: SaveError = { code: 'invalid_input', message: 'Title must
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-function toBuildFields(fields: SlotFieldDefinition[]): BuildField[] {
-  return fields.map((f) => ({
-    id: f.id,
-    ref: f.ref,
-    name: f.label,
-    config: f.config,
-    sortOrder: f.sortOrder,
-  }));
-}
 
 function toBuildRow(slot: BuildSlot): BuildRow {
   return {

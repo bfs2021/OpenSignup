@@ -35,24 +35,42 @@ const KIND: BuildField = {
   sortOrder: 2,
 };
 
+/** A row's contents as the review card draws them, and the group it's in. */
+function RowContents({ title, people, group }: { title: string; people: string; group?: string }) {
+  return (
+    <>
+      <span>{title}</span>
+      <span>
+        <span className="sr-only">, </span>
+        {people}
+      </span>
+      {group ? <span className="sr-only">, {group}</span> : null}
+    </>
+  );
+}
+
 function renderList(extraFields: BuildField[] = []) {
-  render(
-    <ReviewSlotEditing signupId="sig_1" fields={[...FIELDS, ...extraFields]} slots={SLOTS}>
+  return render(
+    <ReviewSlotEditing
+      signupId="sig_1"
+      fields={[...FIELDS, ...extraFields]}
+      id="slots"
+      className=""
+    >
       <ul>
-        <ReviewSlotRow slotId="slot_1" label="Edit slot — Fruit and water">
-          <span>Fruit and water</span>
-          <span>2 people</span>
+        <ReviewSlotRow slot={SLOTS[0]!}>
+          <RowContents title="Fruit and water" people="2 people" />
         </ReviewSlotRow>
-        <ReviewSlotRow slotId="slot_2" label="Edit slot — Napkins">
-          <span>Napkins</span>
-          <span>1 person</span>
+        <ReviewSlotRow slot={SLOTS[1]!}>
+          <RowContents title="Napkins" people="1 person" />
         </ReviewSlotRow>
       </ul>
     </ReviewSlotEditing>,
   );
 }
 
-const rowButton = (name: string) => screen.getByRole('button', { name: `Edit slot — ${name}` });
+const rowButton = (name: string) =>
+  screen.getByRole('button', { name: new RegExp(`^Edit slot — ${name}`) });
 
 /** Opens a slot and waits for its editor, which loads on first use. */
 async function open(name: string) {
@@ -115,7 +133,7 @@ describe('<ReviewSlotRow />', () => {
     expect(fetchMock.mock.calls[0]?.[1]?.method).toBe('PATCH');
     expect(router.refresh).toHaveBeenCalledOnce();
     expect(rowButton('Fruit and water')).toHaveAttribute('aria-expanded', 'false');
-    expect(screen.getAllByRole('status')[0]).toHaveTextContent('Saved');
+    expect(screen.getByRole('status')).toHaveTextContent('Saved');
     await waitFor(() => expect(rowButton('Fruit and water')).toHaveFocus());
   });
 
@@ -138,7 +156,7 @@ describe('<ReviewSlotRow />', () => {
     fireEvent.click(screen.getByRole('button', { name: /Done/ }));
     await waitFor(() => expect(screen.queryByLabelText('What value')).toBeNull());
     expect(fetchMock).not.toHaveBeenCalled();
-    expect(screen.queryByText('Saved')).toBeNull();
+    expect(screen.getByRole('status')).toBeEmptyDOMElement();
   });
 
   it('throws the changes away on Cancel or Escape, and sends nothing', async () => {
@@ -167,13 +185,30 @@ describe('<ReviewSlotRow />', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('Reload to see the latest changes.');
     expect(screen.getByLabelText('Capacity')).toHaveValue(1);
     expect(router.refresh).not.toHaveBeenCalled();
-    expect(screen.queryByText('Saved')).toBeNull();
+    expect(screen.getByRole('status')).toBeEmptyDOMElement();
   });
 
-  it('adds a list choice through the field route before the slot takes it', async () => {
-    fetchMock.mockResolvedValue(ok());
-    renderList([KIND]);
-    await open('Fruit and water');
+  it('names each row "Edit slot — " and what it shows, with its group', () => {
+    render(
+      <ReviewSlotEditing signupId="sig_1" fields={FIELDS} id="slots" className="">
+        <ul>
+          <ReviewSlotRow slot={SLOTS[0]!}>
+            <RowContents title="Fruit and water" people="2 people" group="Sat, Apr 6" />
+          </ReviewSlotRow>
+        </ul>
+      </ReviewSlotEditing>,
+    );
+    // The row's parts sit on lines of their own, so a space may come before
+    // each comma, as here.
+    expect(
+      screen.getByRole('button', {
+        name: /^Edit slot — Fruit and water ?, 2 people ?, Sat, Apr 6$/,
+      }),
+    ).toBeInTheDocument();
+  });
+
+  /** Adds "Drinks" to the Kind list from the open slot's picker. */
+  async function addDrinks() {
     fireEvent.click(screen.getByRole('button', { name: 'Kind value' }));
     fireEvent.click(screen.getByRole('button', { name: /Add to list/ }));
     fireEvent.change(screen.getByLabelText('New option name'), { target: { value: 'Drinks' } });
@@ -181,12 +216,21 @@ describe('<ReviewSlotRow />', () => {
     await waitFor(() =>
       expect(screen.getByRole('button', { name: 'Kind value' })).toHaveTextContent('Drinks'),
     );
+  }
+
+  it('saves a new list choice on Done, with only its config, before the slot', async () => {
+    fetchMock.mockResolvedValue(ok());
+    renderList([KIND]);
+    await open('Fruit and water');
+    await addDrinks();
+    // Nothing is saved until Done, the new choice included.
+    expect(fetchMock).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: /Done/ }));
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.queryByLabelText('What value')).toBeNull());
     expect(sent()).toEqual([
       {
         url: '/api/signups/sig_1/fields/fld_kind',
-        body: { fieldType: 'enum', config: { fieldType: 'enum', choices: ['Food', 'Drinks'] } },
+        body: { config: { fieldType: 'enum', choices: ['Food', 'Drinks'] } },
       },
       {
         url: '/api/slots/slot_1',
@@ -195,19 +239,40 @@ describe('<ReviewSlotRow />', () => {
     ]);
   });
 
-  it('leaves the slot as it was when a new list choice is refused', async () => {
-    fetchMock.mockResolvedValue(refused('forbidden'));
+  it('drops a new list choice on Cancel', async () => {
     renderList([KIND]);
     await open('Fruit and water');
-    fireEvent.click(screen.getByRole('button', { name: 'Kind value' }));
-    fireEvent.click(screen.getByRole('button', { name: /Add to list/ }));
-    fireEvent.change(screen.getByLabelText('New option name'), { target: { value: 'Drinks' } });
-    fireEvent.keyDown(screen.getByLabelText('New option name'), { key: 'Enter' });
-    expect(await screen.findByRole('alert')).toHaveTextContent('You don’t have edit access.');
-    expect(screen.getByRole('button', { name: 'Kind value' })).not.toHaveTextContent('Drinks');
-    fireEvent.click(screen.getByRole('button', { name: /Done/ }));
+    await addDrinks();
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
     await waitFor(() => expect(screen.queryByLabelText('What value')).toBeNull());
-    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(fetchMock).not.toHaveBeenCalled();
+    await open('Fruit and water');
+    fireEvent.click(screen.getByRole('button', { name: 'Kind value' }));
+    expect(screen.queryByRole('option', { name: 'Drinks' })).toBeNull();
+  });
+
+  it('keeps the editor open and saves no slot when the new choice is refused', async () => {
+    fetchMock.mockResolvedValue(refused('invalid_input'));
+    renderList([KIND]);
+    await open('Fruit and water');
+    await addDrinks();
+    fireEvent.click(screen.getByRole('button', { name: /Done/ }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('Some values weren’t accepted.');
+    expect(sent().map((r) => r.url)).toEqual(['/api/signups/sig_1/fields/fld_kind']);
+    expect(screen.getByRole('button', { name: 'Kind value' })).toHaveTextContent('Drinks');
+    expect(router.refresh).not.toHaveBeenCalled();
+  });
+
+  it('refreshes the page when the new choice saved but the slot was refused', async () => {
+    fetchMock.mockResolvedValueOnce(ok()).mockResolvedValueOnce(refused('conflict'));
+    renderList([KIND]);
+    await open('Fruit and water');
+    await addDrinks();
+    fireEvent.click(screen.getByRole('button', { name: /Done/ }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('Reload to see the latest changes.');
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(router.refresh).toHaveBeenCalledOnce();
+    expect(screen.getByLabelText('What value')).toBeInTheDocument();
   });
 
   it('opens one slot at a time, saving the open one before the next opens', async () => {
@@ -222,5 +287,66 @@ describe('<ReviewSlotRow />', () => {
     expect(sent()).toEqual([{ url: '/api/slots/slot_1', body: { capacity: 3 } }]);
     expect(rowButton('Fruit and water')).toHaveAttribute('aria-expanded', 'false');
     expect(rowButton('Napkins')).toHaveAttribute('aria-expanded', 'true');
+  });
+
+  // A save can move the slot to another group, as a new date does when the
+  // list is grouped by date. Its row is then a new one, under a group that
+  // may be folded.
+  describe('when the save moves the slot to another group', () => {
+    function Grouped({ group }: { group: string }) {
+      return (
+        <ReviewSlotEditing signupId="sig_1" fields={FIELDS} id="slots" className="">
+          <details key={group} open={group === 'Sat, Apr 6'}>
+            <summary>{group}</summary>
+            <ul>
+              <ReviewSlotRow slot={SLOTS[0]!}>
+                <RowContents title="Fruit and water" people="2 people" group={group} />
+              </ReviewSlotRow>
+            </ul>
+          </details>
+          <ul>
+            <ReviewSlotRow slot={SLOTS[1]!}>
+              <RowContents title="Napkins" people="1 person" />
+            </ReviewSlotRow>
+          </ul>
+        </ReviewSlotEditing>
+      );
+    }
+
+    /** Draws the list, and moves the first slot to a folded group on refresh. */
+    function renderGrouped() {
+      const { rerender } = render(<Grouped group="Sat, Apr 6" />);
+      router.refresh.mockImplementation(() => rerender(<Grouped group="Sat, Apr 13" />));
+    }
+
+    it('closes it, says Saved, and gives focus back to its row, opening its group', async () => {
+      fetchMock.mockResolvedValue(ok());
+      renderGrouped();
+      await open('Fruit and water');
+      fireEvent.change(screen.getByLabelText('Capacity'), { target: { value: '4' } });
+      fireEvent.click(screen.getByRole('button', { name: /Done/ }));
+
+      await waitFor(() => expect(screen.queryByLabelText('What value')).toBeNull());
+      const row = rowButton('Fruit and water');
+      expect(row).toHaveAccessibleName(/Sat, Apr 13$/);
+      expect(row).toHaveAttribute('aria-expanded', 'false');
+      expect(screen.getByRole('status')).toHaveTextContent('Saved');
+      await waitFor(() => expect(row).toHaveFocus());
+      expect(row.closest('details')).toHaveAttribute('open');
+      expect(fetchMock).toHaveBeenCalledOnce();
+    });
+
+    it('opens the slot chosen meanwhile', async () => {
+      fetchMock.mockResolvedValue(ok());
+      renderGrouped();
+      await open('Fruit and water');
+      fireEvent.change(screen.getByLabelText('Capacity'), { target: { value: '4' } });
+      fireEvent.click(rowButton('Napkins'));
+
+      await waitFor(() => expect(screen.getByLabelText('What value')).toHaveValue('Napkins'));
+      expect(rowButton('Napkins')).toHaveAttribute('aria-expanded', 'true');
+      expect(rowButton('Fruit and water')).toHaveAttribute('aria-expanded', 'false');
+      expect(screen.getAllByLabelText('What value')).toHaveLength(1);
+    });
   });
 });

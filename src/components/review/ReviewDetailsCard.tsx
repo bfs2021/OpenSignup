@@ -9,7 +9,6 @@ import {
   ReviewCard,
   SAVE_BUTTON_CLASS,
 } from './ReviewCard';
-import { patchSignup } from './patch-signup';
 import { useReviewSave } from './useReviewSave';
 
 const INPUT_CLASS =
@@ -28,7 +27,7 @@ export function ReviewDetailsCard({
   /** The schema's lengths, passed in so this island doesn't load the schema. */
   limits: { titleMin: number; titleMax: number; descriptionMax: number };
 }) {
-  const form = useReviewSave((body) => patchSignup(signupId, body));
+  const form = useReviewSave(signupId);
 
   function onSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();

@@ -9,7 +9,6 @@ import {
   ReviewCard,
   SAVE_BUTTON_CLASS,
 } from './ReviewCard';
-import { patchSignup } from './patch-signup';
 import { useReviewSave } from './useReviewSave';
 
 /**
@@ -35,7 +34,7 @@ export function ReviewSignUpCard({
   /** When a reminder goes out, such as "the day before". */
   before: string;
 }) {
-  const form = useReviewSave((body) => patchSignup(signupId, body));
+  const form = useReviewSave(signupId);
 
   function onSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
