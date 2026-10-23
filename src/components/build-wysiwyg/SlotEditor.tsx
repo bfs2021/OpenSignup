@@ -84,8 +84,8 @@ export function SlotEditor({
         <InlineNote className="mb-2.5">
           {signedUpLine(taken)}{' '}
           {remindersOn
-            ? 'If you change its date or time, they\u2019ll get an email.'
-            : 'Reminders are off, so they won\u2019t be told if you change it.'}
+            ? 'If you change its date or time, we\u2019ll email them to let them know.'
+            : 'Reminders are off, so we won\u2019t email them if you change it.'}
         </InlineNote>
       )}
       <div className="grid grid-cols-[repeat(auto-fit,minmax(160px,1fr))] gap-2.5">
