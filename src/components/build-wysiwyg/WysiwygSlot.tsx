@@ -15,6 +15,8 @@ type WysiwygSlotProps = {
    * them (`committedBySlot`). A snapshot from when the page loaded.
    */
   taken: number;
+  /** Whether the signup sends reminders, and so emails about a moved slot. */
+  remindersOn: boolean;
   fields: BuildField[];
   /**
    * All non-group fields in organizer-chosen order. `displayFields[0]` becomes
@@ -44,6 +46,7 @@ type WysiwygSlotProps = {
 export function WysiwygSlot({
   row,
   taken,
+  remindersOn,
   fields,
   displayFields,
   expanded,
@@ -71,6 +74,8 @@ export function WysiwygSlot({
         <SlotEditor
           row={row}
           fields={fields}
+          taken={taken}
+          remindersOn={remindersOn}
           onCellChange={onEditCell}
           onCapacity={onSetCapacity}
           onAddEnumOption={onAddEnumOption}

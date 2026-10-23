@@ -21,8 +21,9 @@ export interface ReminderEmailProps {
   /** Per-signup opt-out link. Reminders are the only email it silences. */
   unsubscribeUrl: string;
   /**
-   * An earlier reminder went out for a different slot time: the organizer has
-   * moved the slot since, so the email says so rather than repeating itself.
+   * The last email the participant got was for a different slot time: the
+   * organizer has moved the slot since, so the email says so rather than
+   * repeating itself.
    */
   changed?: boolean;
 }
@@ -43,7 +44,7 @@ export function ReminderEmail({
       {changed ? (
         <EmailIntro>
           Hi {participantName}, the organizer changed your slot for <strong>{signupTitle}</strong>{' '}
-          after your last reminder. Here are the new details.
+          since we last emailed you. Here are the new details.
         </EmailIntro>
       ) : (
         <EmailIntro>

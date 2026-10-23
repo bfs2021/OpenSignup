@@ -28,6 +28,8 @@ function makeRow(overrides: Partial<BuildRow> = {}): BuildRow {
 function renderEditor(overrides: {
   row?: BuildRow;
   fields?: BuildField[];
+  taken?: number;
+  remindersOn?: boolean;
   onCellChange?: Mock<(fieldRef: string, value: string) => void>;
   onCapacity?: Mock<(capacity: number | null) => void>;
   onAddEnumOption?: Mock<(fieldId: string, value: string) => void | Promise<void>>;
@@ -45,6 +47,8 @@ function renderEditor(overrides: {
     <SlotEditor
       row={overrides.row ?? makeRow({ values: { name: 'Existing' } })}
       fields={overrides.fields ?? [makeField()]}
+      taken={overrides.taken ?? 0}
+      remindersOn={overrides.remindersOn ?? true}
       onCellChange={onCellChange}
       onCapacity={onCapacity}
       onAddEnumOption={onAddEnumOption}
@@ -57,6 +61,25 @@ function renderEditor(overrides: {
 }
 
 describe('SlotEditor', () => {
+  it('says nothing about sign-ups on a slot nobody holds', () => {
+    renderEditor({ taken: 0 });
+    expect(screen.queryByRole('note')).toBeNull();
+  });
+
+  it('warns that the people holding the slot will be emailed about a move', () => {
+    renderEditor({ taken: 2, remindersOn: true });
+    expect(screen.getByRole('note').textContent).toBe(
+      '2 people are signed up for this slot. If you change its date or time, they\u2019ll get an email.',
+    );
+  });
+
+  it('warns that nobody is told when reminders are off', () => {
+    renderEditor({ taken: 1, remindersOn: false });
+    expect(screen.getByRole('note').textContent).toBe(
+      '1 person is signed up for this slot. Reminders are off, so they won\u2019t be told if you change it.',
+    );
+  });
+
   it("stops a text value at its field's maxLength", () => {
     renderEditor({
       fields: [

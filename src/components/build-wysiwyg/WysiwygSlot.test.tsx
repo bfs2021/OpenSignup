@@ -61,6 +61,7 @@ function renderSlot(overrides: RenderProps = {}) {
     <WysiwygSlot
       row={overrides.row ?? makeRow()}
       taken={overrides.taken ?? 0}
+      remindersOn={false}
       fields={displayFields}
       displayFields={displayFields}
       expanded={overrides.expanded ?? false}
