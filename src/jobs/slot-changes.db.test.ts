@@ -14,6 +14,7 @@ import { makeId } from '@/lib/ids';
 import type { Actor } from '@/lib/policy';
 import { commitToSlot } from '@/services/commitments';
 import { createSignup, deleteSignup, publishSignup, updateSignup } from '@/services/signups';
+import { addField } from '@/services/slot-fields';
 import { addSlot, updateSlot } from '@/services/slots';
 import { sendReminderJob } from './reminders';
 import { selectDueSlotChanges, sendSlotChangeJob } from './slot-changes';
@@ -288,6 +289,34 @@ describe('slot-change emails (db)', () => {
     expect(await dueIds()).toContain(s.commitmentIds[0]);
   });
 
+  it('sends nothing when a field change re-times a slot that moved lately', async () => {
+    const s = await makeScenario(fx, 'Re-timed by a field');
+    await moveSlot(fx, s.slotId, dayFromNow(26));
+    await ageMoves(fx.db, s.signupId, 11);
+    expect(await runDue(s)).toEqual(s.commitmentIds);
+
+    // A second date field, filled in without moving the slot, then made the
+    // one reminders count from: the slot's time changes with no move.
+    const field = await addField(fx.db, fx.actor, s.signupId, {
+      ref: 'other',
+      label: 'Other day',
+      fieldType: 'date',
+      config: { fieldType: 'date' },
+    });
+    if (!field.ok) throw new Error(`addField failed: ${field.error.message}`);
+    await updateSlot(fx.db, fx.actor, s.slotId, {
+      values: { day: dayFromNow(26), other: dayFromNow(40) },
+    });
+    const switched = await updateSignup(fx.db, fx.actor, s.signupId, {
+      settings: { reminderFromFieldRef: 'other' },
+    });
+    if (!switched.ok) throw new Error(`updateSignup failed: ${switched.error.message}`);
+    const [slot] = await fx.db.select().from(slots).where(eq(slots.id, s.slotId));
+    expect(slot!.slotAt!.toISOString().slice(0, 10)).toBe(dayFromNow(40));
+
+    expect(await dueIds()).not.toContain(s.commitmentIds[0]);
+  });
+
   it('does not email someone who signed up after the move', async () => {
     const s = await makeScenario(fx, 'Signed up after', { people: 0 });
     await moveSlot(fx, s.slotId, dayFromNow(28));
@@ -413,6 +442,17 @@ describe('slot-change emails (db)', () => {
         })
         .where(
           and(eq(activity.signupId, s.signupId), eq(activity.eventType, 'slot.change_sent')),
+        );
+      // And the move that put it there, so the slot is still where it was moved to.
+      await fx.db
+        .update(activity)
+        .set({
+          payload: sql`jsonb_set(${activity.payload}, '{to}', to_jsonb(
+            ((${activity.payload}->>'to')::timestamptz - make_interval(secs => ${shift / 1000}))
+          ))`,
+        })
+        .where(
+          and(eq(activity.signupId, s.signupId), eq(activity.eventType, 'slot.rescheduled')),
         );
     }
 

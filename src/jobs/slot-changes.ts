@@ -32,8 +32,8 @@ const moveOfThisSlot = sql`m.event_type = 'slot.rescheduled'
  * When a commitment's slot-change email is due: the participant could get a
  * reminder (`notifiableRules`: same switches, so reminders off or an
  * unsubscribe means no change email either), the slot has moved and then sat
- * still for `SLOT_CHANGE_SETTLE_MINUTES`, and the time the participant was
- * last told is not where the slot is now. A slot moved and moved back is
+ * still for `SLOT_CHANGE_SETTLE_MINUTES`, it is still where that move put it,
+ * and the time the participant was last told is not where the slot is now. A slot moved and moved back is
  * settled where they were told, and sends nothing.
  *
  * As with reminders, the scan queues jobs with these rules and the send job
@@ -52,6 +52,18 @@ const slotChangeDueRules = {
     WHERE ${moveOfThisSlot}
       AND m.occurred_at > now() - make_interval(mins => ${SLOT_CHANGE_SETTLE_MINUTES})
   )`,
+  // A field change re-times slots (`rebuildSlotAt`) without moving them, and
+  // records no move. Without this, a slot moved in the last week and then
+  // re-timed that way would pass the two rules above, and everyone holding it
+  // would hear it had moved. Only a time the organizer moved the slot to is
+  // news: the newest move's `to` must be where the slot is now, cut to
+  // milliseconds as in `toldDifferentTime`.
+  'slot re-timed by a field change': sql`(
+    SELECT (m.payload->>'to')::timestamptz FROM activity m
+    WHERE ${moveOfThisSlot}
+    ORDER BY m.occurred_at DESC
+    LIMIT 1
+  ) = date_trunc('milliseconds', ${slots.slotAt})`,
   'participant already knows the time': toldDifferentTime,
 } satisfies Record<string, SQL>;
 

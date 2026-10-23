@@ -18,7 +18,7 @@ export interface ReminderEmailProps {
   /** The same values on one line, from `summarizeSlotValues()`, for the preview text. */
   slotSummary: string;
   notes?: string | null;
-  /** Per-signup opt-out link. Reminders are the only email it silences. */
+  /** Per-signup opt-out link. It silences reminders and slot-change emails. */
   unsubscribeUrl: string;
   /**
    * The last email the participant got was for a different slot time: the
