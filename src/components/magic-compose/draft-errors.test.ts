@@ -14,7 +14,7 @@ const hourly = (retryAfterSeconds?: number) => ({
 });
 
 describe('explainDraftFailure', () => {
-  it('names the bucket the route charges', () => {
+  it('knows the bucket the route charges by name', () => {
     expect(RateLimits.magicComposePerOrganizer.bucket).toBe(MAGIC_COMPOSE_BUCKET);
   });
 
@@ -28,16 +28,35 @@ describe('explainDraftFailure', () => {
     expect(explainDraftFailure(429, hourly())).toEqual({ kind: 'hourly_limit', minutes: 60 });
   });
 
-  it("words the provider's own 429, which has no bucket, as a busy service", () => {
+  const provider = (retryAfterSeconds?: number) => ({
+    code: 'rate_limited',
+    message: 'AI provider is rate limiting requests. Try again shortly.',
+    details: {
+      llmErrorCode: 'rate_limited',
+      ...(retryAfterSeconds === undefined ? {} : { retryAfterSeconds }),
+    },
+  });
+
+  it("words the provider's own 429 as a busy service", () => {
+    const busy = 'The AI service is busy. Try again in a minute.';
+    expect(explainDraftFailure(429, provider(30))).toEqual({ kind: 'message', text: busy });
+    expect(explainDraftFailure(429, provider())).toEqual({ kind: 'message', text: busy });
+  });
+
+  it('says how long the provider asked for, when that is more than a minute', () => {
+    expect(explainDraftFailure(429, provider(600))).toEqual({
+      kind: 'message',
+      text: 'The AI service is busy. Try again in 10 minutes.',
+    });
+  });
+
+  it('keeps the server message for a rate limit that is neither', () => {
     const error = {
       code: 'rate_limited',
-      message: 'AI provider is rate limiting requests. Try again in 30s.',
-      details: { llmErrorCode: 'rate_limited', retryAfterSeconds: 30 },
+      message: 'too many requests',
+      details: { bucket: 'signup.create', retryAfterSeconds: 60 },
     };
-    expect(explainDraftFailure(429, error)).toEqual({
-      kind: 'message',
-      text: 'The AI service is busy. Try again in a minute.',
-    });
+    expect(explainDraftFailure(429, error)).toEqual({ kind: 'message', text: 'too many requests' });
   });
 
   it('keeps the server message and its suggestion for other errors', () => {
