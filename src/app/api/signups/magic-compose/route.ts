@@ -131,7 +131,8 @@ export async function POST(req: NextRequest) {
     if (followUp && raw.ok && asksQuestions(raw.value)) {
       const left = deadline - Date.now();
       if (req.signal.aborted || left < Math.min(RETRY_MIN_MS, getEnv().LLM_TIMEOUT_MS / 2)) {
-        outcome.gaveUp = true;
+        // An organizer who has left isn't told anything, so it isn't a give-up.
+        outcome.gaveUp = !req.signal.aborted;
         log.warn(
           { promptLength: userPrompt.length, msLeft: left, aborted: req.signal.aborted },
           'magic-compose asked again after the answers, with no time to retry',
@@ -189,8 +190,9 @@ export async function POST(req: NextRequest) {
     }
 
     // Structured refusal: model returned only `refusalReason`. Surface the
-    // reason to the user without creating a signup, writing activity, or
-    // burning further work. Rate-limit stays consumed (the LLM call did happen).
+    // reason to the user without creating a signup or burning further work
+    // (a follow-up's magic_compose.answered row is still written, as for any
+    // ending). Rate-limit stays consumed (the LLM call did happen).
     if ('refusalReason' in draft.data) {
       log.info(
         { refusalReason: draft.data.refusalReason, promptLength: userPrompt.length },
@@ -218,7 +220,9 @@ export async function POST(req: NextRequest) {
         },
         'magic-compose asked questions',
       );
-      await recordAsked(db, actor, workspaceId, questions);
+      // Questions nobody saw would count as "asked, then left the questions
+      // screen", so a request the organizer has already left records none.
+      if (!req.signal.aborted) await recordAsked(db, actor, workspaceId, questions);
       return ok({ questions });
     }
 
