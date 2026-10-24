@@ -3,7 +3,6 @@ import { rateLimits } from '@/db/schema/rate-limits';
 import type { Db } from '@/db/client';
 import { serviceError, ServiceException } from './errors';
 import { LOGIN_CODE_MAX_AGE_MS } from '@/auth/login-code-lifetime';
-import { MAGIC_COMPOSE_BUCKET } from '@/lib/magic-compose/limits';
 
 export interface RateLimitPolicy {
   bucket: string;
@@ -102,7 +101,7 @@ export const RateLimits = {
   // and unmetered DB hits.
   commitmentTokenOpsPerIp: { bucket: 'commit.token.ip', max: 30, windowSeconds: 60 },
   signupCreatePerOrganizer: { bucket: 'signup.create', max: 60, windowSeconds: 3600 },
-  magicComposePerOrganizer: { bucket: MAGIC_COMPOSE_BUCKET, max: 10, windowSeconds: 3600 },
+  magicComposePerOrganizer: { bucket: 'magic.compose', max: 10, windowSeconds: 3600 },
   // Unsubscribe is unauthenticated and token-guarded. Generous on purpose:
   // RFC 8058 one-click POSTs arrive from a handful of provider egress IPs on
   // behalf of every recipient, so a tight per-IP cap would become an
