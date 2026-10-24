@@ -41,6 +41,8 @@ export const ACTIVITY_EVENTS = [
   'signup.editor_opened',
   'signup.previewed',
   'signup.viewed',
+  'magic_compose.asked',
+  'magic_compose.answered',
   'slot.created',
   'slot.updated',
   'slot.deleted',
