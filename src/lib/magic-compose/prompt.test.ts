@@ -11,6 +11,7 @@ import {
   MAX_FIELDS,
   MAX_SLOTS,
   QuestionsSchema,
+  asksQuestions,
   buildMessages,
   isQuestionsReply,
 } from './prompt';
@@ -273,7 +274,7 @@ describe('QuestionsSchema', () => {
     expect(
       parse({ ...draft, questions: { topics: ['what'], whatOptions: ['A', 'B'] } }).success,
     ).toBe(false);
-    expect(parse({ ...draft, questions: null }).success).toBe(false);
+    expect(parse({ ...draft, questions: { topics: ['when'] } }).success).toBe(false);
     expect(parse(draft).success).toBe(true);
   });
 
@@ -282,11 +283,62 @@ describe('QuestionsSchema', () => {
     expect(parse({ answer: 'Sure!' }).success).toBe(false);
   });
 
+  it('drops null keys first, as models in json_object mode send them for keys they skip', () => {
+    const draft = {
+      title: 'Bake sale',
+      fields: [{ ref: 'what', label: 'What', fieldType: 'text' }],
+      slots: [{ values: { what: 'Staff the table' } }],
+      groupBy: null,
+    };
+    const asDraft = parse({ ...draft, questions: null, refusalReason: null });
+    expect(asDraft.success && isQuestionsReply(asDraft.data)).toBe(false);
+    expect(asDraft.success && 'title' in asDraft.data).toBe(true);
+    const asked = parse(ask({ topics: ['what'], whatOptions: ['A', 'B'] }));
+    const askedWithNull = parse({
+      ...ask({ topics: ['what'], whatOptions: ['A', 'B'] }),
+      refusalReason: null,
+    });
+    expect(askedWithNull).toEqual(asked);
+  });
+
+  it('tidies the options as it tidies the answers, so a doubled space is one', () => {
+    const r = QuestionsSchema.parse(
+      ask({ topics: ['what'], whatOptions: ['Staff  the\ntable', 'Bake'] }),
+    );
+    expect(r.questions.whatOptions).toEqual(['Staff the table', 'Bake']);
+    expect(
+      parse(ask({ topics: ['what'], whatOptions: ['Staff  the table', 'staff the table'] }))
+        .success,
+    ).toBe(false);
+  });
+
   it('lets a refusal win over anything beside it, as before', () => {
     const r = parse({
       refusalReason: 'No.',
       questions: { topics: ['what'], whatOptions: ['A', 'B'] },
     });
     expect(r.success && 'refusalReason' in r.data).toBe(true);
+  });
+});
+
+describe('asksQuestions', () => {
+  it('reads any reply with a questions key as asking, whatever its shape', () => {
+    expect(
+      asksQuestions({
+        questions: { topics: ['what', 'when', 'how_many'], whatOptions: ['A', 'B'] },
+      }),
+    ).toBe(true);
+    expect(asksQuestions({ questions: { topics: ['when'] } })).toBe(true);
+    expect(asksQuestions({ title: 'Half a draft', questions: { topics: ['what'] } })).toBe(true);
+  });
+
+  it('reads a null questions key as absent, and a refusal as a refusal', () => {
+    expect(asksQuestions({ title: 'Bake sale', fields: [], slots: [], questions: null })).toBe(
+      false,
+    );
+    expect(asksQuestions({ questions: { topics: ['what'] }, refusalReason: 'No.' })).toBe(false);
+    expect(asksQuestions({ questions: { topics: ['what'] }, refusalReason: null })).toBe(true);
+    expect(asksQuestions(null)).toBe(false);
+    expect(asksQuestions(['questions'])).toBe(false);
   });
 });

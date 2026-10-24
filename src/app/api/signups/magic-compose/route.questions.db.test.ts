@@ -221,6 +221,14 @@ describe('POST /api/signups/magic-compose: questions and follow-ups (db)', () =>
     expect(await signupsMade()).toBe(1);
   });
 
+  it('drafts in one call when the draft carries a null questions key', async () => {
+    llm.replies = [ok({ ...DRAFT, questions: null })];
+    const res = await compose({ prompt: 'Bake sale', followUp: ANSWERS });
+    expect(res.status).toBe(200);
+    expect(llm.calls).toHaveLength(1);
+    expect(await signupsMade()).toBe(1);
+  });
+
   it('says it couldn’t draft when the retry asks again in another shape', async () => {
     llm.replies = [ok(QUESTIONS), ok({ questions: { topics: ['when'] } })];
     const res = await compose({ prompt: 'Bake sale', followUp: ANSWERS });

@@ -57,6 +57,15 @@ export interface FollowUp {
   placeholders?: true;
 }
 
+/**
+ * Text as the questions round compares and sends it: trimmed, with every run
+ * of whitespace (newlines too) made one space. The page and the server both
+ * use it, so an item that looks the same on screen is the same to both.
+ */
+export function tidyText(text: string): string {
+  return text.replace(/\s+/g, ' ').trim();
+}
+
 /** The items a follow-up drafts from, in the order `howMany` counts them. */
 export function followUpItems(followUp: FollowUp): string[] {
   return [...followUp.what.picked, ...followUp.what.added];

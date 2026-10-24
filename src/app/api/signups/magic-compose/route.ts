@@ -11,6 +11,7 @@ import { consumeRateLimit, RateLimits } from '@/lib/rate-limit';
 import { buildFollowUpMessages, FollowUpSchema } from '@/lib/magic-compose/follow-up';
 import { defaultLlmClient } from '@/lib/magic-compose/llm-client';
 import {
+  asksQuestions,
   buildMessages,
   isQuestionsReply,
   MagicComposeDraftSchema,
@@ -34,19 +35,6 @@ const PromptBodySchema = z.object({
  * budget, so a short LLM_TIMEOUT_MS still leaves room for a retry.
  */
 const RETRY_MIN_MS = 15_000;
-
-/**
- * Whether a reply asks questions, in any shape. After the answers, a model
- * that asks again most likely asks about less than the first time (only
- * "when", say, with no options), which `QuestionsSchema` would reject as
- * malformed and the organizer would see as a broken draft. A refusal beside
- * it still counts as a refusal, as `MagicComposeDraftSchema` reads it.
- */
-function asksQuestions(value: unknown): boolean {
-  return (
-    typeof value === 'object' && value !== null && 'questions' in value && !('refusalReason' in value)
-  );
-}
 
 /**
  * The model asked again after the answers, even after the firmer retry (or
