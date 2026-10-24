@@ -5,9 +5,9 @@ import type { FollowUp, MagicComposeQuestions } from '@/lib/magic-compose/questi
 
 /** How a follow-up request went, beyond what the answers themselves say. */
 export interface FollowUpOutcome {
-  /** The first reply asked questions again, so the route retried. */
+  /** The first reply asked questions again, and the route made its one retry. */
   retried: boolean;
-  /** The retry asked too, or there was no time for it: the organizer got asked_again. */
+  /** The retry asked too, or there was no time for one: the organizer got asked_again. */
   gaveUp: boolean;
 }
 

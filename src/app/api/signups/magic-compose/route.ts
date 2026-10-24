@@ -14,7 +14,6 @@ import {
   buildMessages,
   isQuestionsReply,
   MagicComposeDraftSchema,
-  QuestionsSchema,
 } from '@/lib/magic-compose/prompt';
 import { persistDraft } from '@/lib/magic-compose/persist';
 import type { FollowUp } from '@/lib/magic-compose/questions';
@@ -32,9 +31,23 @@ const PromptBodySchema = z.object({
 /**
  * The least time worth giving the one retry after the model asked again. With
  * less of the request's budget left, the retry would most likely time out, so
- * the organizer is told straight away instead.
+ * the organizer is told straight away instead. Never more than half the
+ * budget, so a short LLM_TIMEOUT_MS still leaves room for a retry.
  */
 const RETRY_MIN_MS = 15_000;
+
+/**
+ * Whether a reply asks questions, in any shape. After the answers, a model
+ * that asks again most likely asks about less than the first time (only
+ * "when", say, with no options), which `QuestionsSchema` would reject as
+ * malformed and the organizer would see as a broken draft. A refusal beside
+ * it still counts as a refusal, as `MagicComposeDraftSchema` reads it.
+ */
+function asksQuestions(value: unknown): boolean {
+  return (
+    typeof value === 'object' && value !== null && 'questions' in value && !('refusalReason' in value)
+  );
+}
 
 /**
  * The model asked again after the answers, even after the firmer retry (or
@@ -127,10 +140,9 @@ export async function POST(req: NextRequest) {
     // Answers must end in a draft or a refusal, never more questions. A model
     // that asks anyway gets one firmer retry, on the same quota. The log lines
     // say how long the description was, never what the answers were.
-    if (followUp && raw.ok && QuestionsSchema.safeParse(raw.value).success) {
-      outcome.retried = true;
+    if (followUp && raw.ok && asksQuestions(raw.value)) {
       const left = deadline - Date.now();
-      if (req.signal.aborted || left < RETRY_MIN_MS) {
+      if (req.signal.aborted || left < Math.min(RETRY_MIN_MS, getEnv().LLM_TIMEOUT_MS / 2)) {
         outcome.gaveUp = true;
         log.warn(
           { promptLength: userPrompt.length, msLeft: left, aborted: req.signal.aborted },
@@ -142,12 +154,13 @@ export async function POST(req: NextRequest) {
         { promptLength: userPrompt.length },
         'magic-compose asked again after the answers; retrying once',
       );
+      outcome.retried = true;
       raw = await client.generateDraft(
         buildFollowUpMessages(userPrompt, followUp, { firmly: true }),
         req.signal,
         { timeoutMs: left },
       );
-      if (raw.ok && QuestionsSchema.safeParse(raw.value).success) {
+      if (raw.ok && asksQuestions(raw.value)) {
         outcome.gaveUp = true;
         log.warn({ promptLength: userPrompt.length }, 'magic-compose asked again after the retry');
         return askedAgain(followUp);

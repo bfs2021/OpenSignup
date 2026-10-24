@@ -94,10 +94,12 @@ In `magic_compose.answered`:
 - `placeholders` is `true` when the organizer pressed Draft with placeholders.
   Every answer is then blank; the flag tells it apart from leaving them all
   blank by hand.
-- `retried` is `true` when the model answered with questions again, so the
-  server asked it once more, more firmly, without charging the quota again.
+- `retried` is `true` when the model answered with questions again and the
+  server asked it once more, more firmly, without charging the quota again:
+  one more call to the AI.
 - `gaveUp` is `true` when that retry asked too, or there was no time left for
-  it, and the organizer was told the AI couldn't draft from their answers.
+  one (then `retried` is `false`), and the organizer was told the AI couldn't
+  draft from their answers.
 
 Both rows have `signup_id` set to `NULL` and `workspace_id` set to the
 organizer's default workspace. They describe no change, so each is written on
