@@ -1,9 +1,17 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { lazy, Suspense, useEffect, useState } from 'react';
 import { Check, Sparkles } from 'lucide-react';
 import type { DraftPreview } from '@/app/api/signups/magic-compose/preview';
 import { useTypewriter } from '@/hooks/useTypewriter';
+import type { FollowUp } from '@/lib/magic-compose/questions';
+import { YouWrote } from './YouWrote';
+
+// Only a call with answers shows it, so it loads with the questions rather
+// than with the page (see `preloadQuestions` in MagicComposeRoot).
+const DraftingFrom = lazy(() =>
+  import('./DraftingFrom').then((m) => ({ default: m.DraftingFrom })),
+);
 
 type RevealKind = 'fields' | 'slots';
 
@@ -81,11 +89,14 @@ function formatPreviewValue(raw: unknown): string {
 
 export function Drafting({
   prompt,
+  followUp = null,
   draft,
   onCancel,
   onAnimationDone,
 }: {
   prompt: string;
+  /** The answers this draft is made from, on the call after the questions. */
+  followUp?: FollowUp | null;
   draft: DraftPreview | null;
   onCancel: () => void;
   onAnimationDone: () => void;
@@ -114,10 +125,8 @@ export function Drafting({
     };
   }, [draft, onAnimationDone]);
 
-  const reached = (id: string) =>
-    DRAFT_STEPS.findIndex((s) => s.id === id) <= stepIdx;
-  const passed = (id: string) =>
-    DRAFT_STEPS.findIndex((s) => s.id === id) < stepIdx;
+  const reached = (id: string) => DRAFT_STEPS.findIndex((s) => s.id === id) <= stepIdx;
+  const passed = (id: string) => DRAFT_STEPS.findIndex((s) => s.id === id) < stepIdx;
 
   const titleText = useTypewriter(
     draft?.title ?? '',
@@ -157,18 +166,26 @@ export function Drafting({
   const slotCols = Math.max(1, visibleFields.length);
   const gridTemplateColumns = `38px repeat(${slotCols}, minmax(0, 1fr)) 50px`;
 
+  // A first call may come back with questions rather than a draft, so until
+  // one arrives the screen doesn't promise one. A call with answers always drafts.
+  const reading = !draft && !followUp;
+
   return (
     <div className="mx-auto mt-10 grid max-w-[1080px] grid-cols-1 items-start gap-7 md:grid-cols-[minmax(300px,360px)_minmax(0,1fr)]">
       <aside className="flex flex-col gap-4 md:sticky md:top-6">
         <PulseMark />
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Drafting your signup</h1>
-          <p className="text-ink-muted mt-1.5 text-sm leading-relaxed">
-            You&apos;ll be able to edit anything once it&apos;s ready.
+          <h1 className="text-2xl font-semibold tracking-tight">
+            {reading ? 'Reading your description' : 'Drafting your signup'}
+          </h1>
+          <p className="mt-1.5 text-sm leading-relaxed text-ink-muted">
+            {reading
+              ? "You'll get a draft, or a few quick questions if it needs more to go on."
+              : "You'll be able to edit anything once it's ready."}
           </p>
         </div>
 
-        <ul className="border-surface-sunk flex flex-col gap-0.5 rounded-2xl border bg-white p-1.5">
+        <ul className="flex flex-col gap-0.5 rounded-2xl border border-surface-sunk bg-white p-1.5">
           {DRAFT_STEPS.map((s, i) => {
             const done = i < stepIdx;
             const active = i === stepIdx;
@@ -182,11 +199,7 @@ export function Drafting({
                 <StepIcon done={done} active={active} />
                 <div
                   className={`text-sm ${
-                    done
-                      ? 'text-ink-muted'
-                      : active
-                        ? 'text-ink font-medium'
-                        : 'text-ink-soft'
+                    done ? 'text-ink-muted' : active ? 'font-medium text-ink' : 'text-ink-soft'
                   }`}
                 >
                   {s.label}
@@ -199,24 +212,28 @@ export function Drafting({
         <button
           type="button"
           onClick={onCancel}
-          className="text-ink-muted hover:text-ink self-start rounded-xl px-3 py-2 text-sm font-medium"
+          className="min-h-11 self-start rounded-xl px-3 text-sm font-medium text-ink-muted hover:text-ink"
         >
           Cancel
         </button>
       </aside>
 
-      <section className="border-surface-sunk overflow-hidden rounded-2xl border bg-white">
-        <div className="border-surface-sunk bg-surface-raised text-ink-muted flex items-center justify-between border-b px-4 py-3 text-xs font-medium">
+      <section className="overflow-hidden rounded-2xl border border-surface-sunk bg-white">
+        <div className="flex items-center justify-between border-b border-surface-sunk bg-surface-raised px-4 py-3 text-xs font-medium text-ink-muted">
           <span className="flex items-center gap-2">
-            <span className="bg-warn inline-block h-1.5 w-1.5 animate-pulse rounded-full" />
-            Drafting · live
+            <span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-warn" />
+            {reading ? 'Reading' : 'Drafting'} · live
           </span>
         </div>
 
         <div className="flex flex-col gap-5 p-6">
-          <blockquote className="border-surface-sunk text-ink-muted line-clamp-2 border-l-2 pl-3.5 text-sm leading-relaxed">
-            {prompt}
-          </blockquote>
+          {followUp ? (
+            <Suspense fallback={<YouWrote prompt={prompt} variant="box" />}>
+              <DraftingFrom prompt={prompt} followUp={followUp} />
+            </Suspense>
+          ) : (
+            <YouWrote prompt={prompt} variant="box" />
+          )}
 
           <DraftField label="Title">
             {reached('title') && titleText ? (
@@ -231,7 +248,7 @@ export function Drafting({
 
           <DraftField label="Description">
             {descShown && descText ? (
-              <p className="text-ink text-[15px] leading-relaxed">
+              <p className="text-[15px] leading-relaxed text-ink">
                 {descText}
                 {!descDone && <Caret />}
               </p>
@@ -256,7 +273,7 @@ export function Drafting({
                     i < fieldsRevealed ? (
                       <span
                         key={f.ref}
-                        className="bg-brand/10 text-brand border-brand/20 inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-[13px] font-medium"
+                        className="inline-flex items-center gap-1.5 rounded-full border border-brand/20 bg-brand/10 px-3 py-1.5 text-[13px] font-medium text-brand"
                       >
                         {f.label}
                       </span>
@@ -265,7 +282,7 @@ export function Drafting({
                     ),
                   )}
               {fieldsRevealed === visibleFields.length && overflowFields > 0 && (
-                <span className="text-ink-muted inline-flex items-center px-3 py-1.5 text-[13px]">
+                <span className="inline-flex items-center px-3 py-1.5 text-[13px] text-ink-muted">
                   +{overflowFields} more
                 </span>
               )}
@@ -276,12 +293,12 @@ export function Drafting({
             label="Slots"
             meta={slotsCount > 0 ? `${slotsCount} of ${slots.length}` : undefined}
           >
-            <ul className="border-surface-sunk bg-surface-raised overflow-hidden rounded-xl border">
+            <ul className="overflow-hidden rounded-xl border border-surface-sunk bg-surface-raised">
               {visibleSlots.length === 0
                 ? Array.from({ length: 4 }).map((_, i) => (
                     <li
                       key={i}
-                      className="border-surface-sunk grid min-h-[44px] items-center gap-3 border-b px-3.5 py-2.5 last:border-b-0"
+                      className="grid min-h-[44px] items-center gap-3 border-b border-surface-sunk px-3.5 py-2.5 last:border-b-0"
                       style={{ gridTemplateColumns: '38px 1fr 50px' }}
                     >
                       <Skeleton width={16} height={10} />
@@ -294,12 +311,12 @@ export function Drafting({
                     return (
                       <li
                         key={i}
-                        className={`border-surface-sunk grid min-h-[44px] items-center gap-3 border-b px-3.5 py-2.5 last:border-b-0 ${
+                        className={`grid min-h-[44px] items-center gap-3 border-b border-surface-sunk px-3.5 py-2.5 last:border-b-0 ${
                           shown ? 'bg-white' : ''
                         }`}
                         style={{ gridTemplateColumns }}
                       >
-                        <span className="text-ink-soft font-mono text-xs">{i + 1}</span>
+                        <span className="font-mono text-xs text-ink-soft">{i + 1}</span>
                         {shown ? (
                           <>
                             {visibleFields.map((f) => (
@@ -307,7 +324,7 @@ export function Drafting({
                                 {formatPreviewValue(s.values[f.ref])}
                               </span>
                             ))}
-                            <span className="text-ink-muted justify-self-end font-mono text-xs">
+                            <span className="justify-self-end font-mono text-xs text-ink-muted">
                               0/{s.capacity ?? '∞'}
                             </span>
                           </>
@@ -323,7 +340,7 @@ export function Drafting({
                     );
                   })}
               {slotsCount === visibleSlots.length && overflowSlots > 0 && (
-                <li className="text-ink-muted px-3.5 py-2 text-center text-[13px]">
+                <li className="px-3.5 py-2 text-center text-[13px] text-ink-muted">
                   +{overflowSlots} more
                 </li>
               )}
@@ -347,10 +364,10 @@ function DraftField({
   return (
     <div>
       <div className="mb-2 flex items-baseline justify-between">
-        <div className="text-ink-soft text-[11.5px] font-medium uppercase tracking-wide">
+        <div className="text-[11.5px] font-medium uppercase tracking-wide text-ink-soft">
           {label}
         </div>
-        {meta && <div className="text-ink-muted font-mono text-xs">{meta}</div>}
+        {meta && <div className="font-mono text-xs text-ink-muted">{meta}</div>}
       </div>
       {children}
     </div>
@@ -384,7 +401,7 @@ function Caret() {
   return (
     <span
       aria-hidden="true"
-      className="bg-brand ml-0.5 inline-block h-[1em] w-[2px] animate-pulse align-text-bottom"
+      className="ml-0.5 inline-block h-[1em] w-[2px] animate-pulse bg-brand align-text-bottom"
     />
   );
 }
@@ -392,7 +409,7 @@ function Caret() {
 function StepIcon({ done, active }: { done: boolean; active: boolean }) {
   if (done) {
     return (
-      <span className="bg-success inline-flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-full text-white">
+      <span className="inline-flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-full bg-success text-white">
         <Check className="h-3 w-3" strokeWidth={3} aria-hidden="true" />
       </span>
     );
@@ -400,18 +417,18 @@ function StepIcon({ done, active }: { done: boolean; active: boolean }) {
   if (active) {
     return (
       <span className="relative h-5 w-5 flex-shrink-0">
-        <span className="border-surface-sunk border-t-brand absolute inset-0 animate-spin rounded-full border-2" />
+        <span className="absolute inset-0 animate-spin rounded-full border-2 border-surface-sunk border-t-brand" />
       </span>
     );
   }
   return (
-    <span className="border-surface-sunk inline-block h-5 w-5 flex-shrink-0 rounded-full border-[1.5px] bg-white" />
+    <span className="inline-block h-5 w-5 flex-shrink-0 rounded-full border-[1.5px] border-surface-sunk bg-white" />
   );
 }
 
 function PulseMark() {
   return (
-    <div className="bg-brand/10 text-brand relative flex h-14 w-14 items-center justify-center rounded-2xl">
+    <div className="relative flex h-14 w-14 items-center justify-center rounded-2xl bg-brand/10 text-brand">
       <Sparkles className="h-6 w-6" aria-hidden="true" />
       <span className="absolute inset-0 animate-ping rounded-2xl border-2 border-brand opacity-50" />
     </div>
