@@ -8,6 +8,7 @@ import {
   type ReactNode,
   type SetStateAction,
 } from 'react';
+import { flushSync } from 'react-dom';
 import Link from 'next/link';
 import { Check, ChevronLeft, Minus, Plus, Sparkles, X } from 'lucide-react';
 import {
@@ -176,7 +177,23 @@ interface Part {
 function What({ options, answers, update }: Part & { options: string[] }) {
   const id = useId();
   const full = isFull(answers);
-  const add = () => update((a) => addPending(a, options));
+  // Add and a chip's × go away once used, so each hands focus on rather than
+  // dropping it to the page.
+  const inputRef = useRef<HTMLInputElement>(null);
+  const fullRef = useRef<HTMLSpanElement>(null);
+  const removeRefs = useRef(new Map<string, HTMLButtonElement>());
+  const add = () => {
+    flushSync(() => update((a) => addPending(a, options)));
+    // A full list takes the box away; the line saying so stands in its place.
+    (inputRef.current ?? fullRef.current)?.focus();
+  };
+  // To the next chip's ×, or to the box when it was the last chip.
+  const remove = (item: string) => {
+    const next = answers.added[answers.added.indexOf(item) + 1];
+    flushSync(() => update((a) => removeAdded(a, item)));
+    const nextChip = next === undefined ? undefined : removeRefs.current.get(next);
+    (nextChip ?? inputRef.current)?.focus();
+  };
   const placeholder = answers.added.length > 0 ? 'Add another' : 'Add your own';
   // Size the box to what it shows, so the pill ends where the words do.
   const chars = Math.min(40, Math.max(answers.pending.length, placeholder.length));
@@ -223,9 +240,13 @@ function What({ options, answers, update }: Part & { options: string[] }) {
             <Tick />
             {item}
             <button
+              ref={(button) => {
+                if (button) removeRefs.current.set(item, button);
+                else removeRefs.current.delete(item);
+              }}
               type="button"
               aria-label={`Remove ${item}`}
-              onClick={() => update((a) => removeAdded(a, item))}
+              onClick={() => remove(item)}
               className="-my-[5px] inline-flex h-11 w-8 items-center justify-center rounded-full focus-visible:outline-offset-[-6px]"
             >
               <X className="h-[13px] w-[13px]" strokeWidth={2.5} aria-hidden="true" />
@@ -233,7 +254,11 @@ function What({ options, answers, update }: Part & { options: string[] }) {
           </span>
         ))}
         {full ? (
-          <span className={`${HINT} inline-flex min-h-11 items-center`}>
+          <span
+            ref={fullRef}
+            tabIndex={-1}
+            className={`${HINT} inline-flex min-h-11 items-center outline-none`}
+          >
             {WHAT_ITEMS_MAX} is the most. Remove one to add another.
           </span>
         ) : (
@@ -253,6 +278,7 @@ function What({ options, answers, update }: Part & { options: string[] }) {
               />
               <span className="sr-only">Add your own, then press Enter</span>
               <input
+                ref={inputRef}
                 type="text"
                 value={answers.pending}
                 maxLength={WHAT_ITEM_MAX_LENGTH}
@@ -335,6 +361,7 @@ function When({ answers, update }: Part) {
             onChange={(e) => set({ date: e.target.value })}
             className={`${BOX} ${BOX_FOCUS} px-3`}
           />
+          {/* The times run a pixel past the border each way, so each is a 44px target. */}
           <span
             className={`${BOX} flex items-center gap-1.5 px-3 focus-within:border-brand sm:pl-2.5 sm:pr-1`}
           >
@@ -346,7 +373,7 @@ function When({ answers, update }: Part) {
               type="time"
               value={answers.from}
               onChange={(e) => set({ from: e.target.value })}
-              className="h-10 min-w-0 flex-1 border-0 bg-transparent p-0 outline-none"
+              className="h-11 min-w-0 flex-1 border-0 bg-transparent p-0 outline-none"
             />
             <span aria-hidden="true" className="text-ink-soft">
               –
@@ -359,7 +386,7 @@ function When({ answers, update }: Part) {
               type="time"
               value={answers.to}
               onChange={(e) => set({ to: e.target.value })}
-              className="h-10 min-w-0 flex-1 border-0 bg-transparent p-0 outline-none"
+              className="h-11 min-w-0 flex-1 border-0 bg-transparent p-0 outline-none"
             />
           </span>
           <span className="text-[13px] text-ink-soft">Times are optional.</span>
@@ -413,12 +440,13 @@ function HowMany({ answers, update }: Part) {
                 className="flex items-center justify-between gap-2.5 border-t border-surface-sunk py-1.5 sm:gap-3"
               >
                 <span className="min-w-0 text-[15px]">{item}</span>
-                <span className="inline-flex h-11 flex-shrink-0 items-center overflow-hidden rounded-[12px] border border-surface-sunk bg-white shadow-sm focus-within:border-brand">
+                {/* 46px with its border, so −, + and the number are each 44px targets. */}
+                <span className="inline-flex h-[46px] flex-shrink-0 items-center overflow-hidden rounded-[12px] border border-surface-sunk bg-white shadow-sm focus-within:border-brand">
                   <button
                     type="button"
                     aria-label={`Fewer people for ${item}`}
                     onClick={() => setCount(item, stepCount(count, -1))}
-                    className="inline-flex h-[42px] w-10 items-center justify-center text-ink-muted hover:bg-surface-raised focus-visible:outline-offset-[-2px] sm:w-[42px]"
+                    className="inline-flex h-11 w-10 items-center justify-center text-ink-muted hover:bg-surface-raised focus-visible:outline-offset-[-2px] sm:w-[42px]"
                   >
                     <Minus className="h-[15px] w-[15px]" strokeWidth={2.25} aria-hidden="true" />
                   </button>
@@ -434,13 +462,13 @@ function HowMany({ answers, update }: Part) {
                     onChange={(e) => setCount(item, e.target.value)}
                     // Show what will be sent: a whole number, or empty for no limit.
                     onBlur={() => setCount(item, String(parseCount(count) ?? ''))}
-                    className="h-[42px] w-[72px] border-x border-surface-sunk bg-transparent px-0.5 text-center text-[15px] tabular-nums outline-none [appearance:textfield] placeholder:text-ink-soft sm:w-[76px] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+                    className="h-11 w-[72px] border-x border-surface-sunk bg-transparent px-0.5 text-center text-[15px] tabular-nums outline-none [appearance:textfield] placeholder:text-ink-soft sm:w-[76px] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
                   />
                   <button
                     type="button"
                     aria-label={`More people for ${item}`}
                     onClick={() => setCount(item, stepCount(count, 1))}
-                    className="inline-flex h-[42px] w-10 items-center justify-center text-brand hover:bg-surface-raised focus-visible:outline-offset-[-2px] sm:w-[42px]"
+                    className="inline-flex h-11 w-10 items-center justify-center text-brand hover:bg-surface-raised focus-visible:outline-offset-[-2px] sm:w-[42px]"
                   >
                     <Plus className="h-[15px] w-[15px]" strokeWidth={2.25} aria-hidden="true" />
                   </button>

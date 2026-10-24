@@ -3,6 +3,7 @@
 import '@testing-library/jest-dom/vitest';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { WHAT_ITEMS_MAX } from '@/lib/magic-compose/limits';
 import type { MagicComposeQuestions } from '@/lib/magic-compose/questions';
 import { MagicComposeRoot } from './MagicComposeRoot';
 
@@ -289,5 +290,65 @@ describe('<MagicComposeRoot /> questions', () => {
       'aria-pressed',
       'false',
     );
+  });
+});
+
+describe('<MagicComposeRoot /> questions focus', () => {
+  const addBox = () => screen.getByRole('textbox', { name: 'Add your own, then press Enter' });
+
+  /** Adds each item from "Add your own" with Enter, as a keyboard user would. */
+  function addWithEnter(...items: string[]) {
+    for (const item of items) {
+      addBox().focus();
+      fireEvent.change(addBox(), { target: { value: item } });
+      fireEvent.keyDown(addBox(), { key: 'Enter' });
+    }
+  }
+
+  it('stays in "Add your own" after Add, which goes away, and after Enter', async () => {
+    stubReplies(asks());
+    await openQuestions();
+    fireEvent.change(addBox(), { target: { value: 'Bring drinks' } });
+    const add = screen.getByRole('button', { name: 'Add' });
+    add.focus();
+    fireEvent.click(add);
+    expect(screen.queryByRole('button', { name: 'Add' })).toBeNull();
+    expect(addBox()).toHaveFocus();
+
+    addWithEnter('Clean up after');
+    expect(screen.getByRole('button', { name: 'Remove Clean up after' })).toBeInTheDocument();
+    expect(addBox()).toHaveFocus();
+  });
+
+  it("moves from a removed chip's × to the next chip's ×, or to the box after the last", async () => {
+    stubReplies(asks());
+    await openQuestions();
+    addWithEnter('Bring drinks', 'Clean up after', 'Sell tickets');
+
+    const first = screen.getByRole('button', { name: 'Remove Bring drinks' });
+    first.focus();
+    fireEvent.click(first);
+    expect(screen.getByRole('button', { name: 'Remove Clean up after' })).toHaveFocus();
+
+    const last = screen.getByRole('button', { name: 'Remove Sell tickets' });
+    last.focus();
+    fireEvent.click(last);
+    expect(addBox()).toHaveFocus();
+  });
+
+  it(`moves to the line about the limit when item ${WHAT_ITEMS_MAX} takes the box away`, async () => {
+    stubReplies(asks({ topics: ['what'], whatOptions: ASKED.whatOptions }));
+    await openQuestions();
+    addWithEnter(...Array.from({ length: WHAT_ITEMS_MAX }, (_, i) => `Item ${i + 1}`));
+    expect(screen.queryByRole('textbox', { name: 'Add your own, then press Enter' })).toBeNull();
+    expect(
+      screen.getByText(`${WHAT_ITEMS_MAX} is the most. Remove one to add another.`),
+    ).toHaveFocus();
+
+    // Removing one brings the box back, and focus goes to it.
+    const remove = screen.getByRole('button', { name: `Remove Item ${WHAT_ITEMS_MAX}` });
+    remove.focus();
+    fireEvent.click(remove);
+    expect(addBox()).toHaveFocus();
   });
 });

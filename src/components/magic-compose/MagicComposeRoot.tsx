@@ -7,6 +7,7 @@ import type { DraftPreview } from '@/app/api/signups/magic-compose/preview';
 import { FormError } from '@/components/ui/form-error';
 import type { FollowUp, MagicComposeQuestions } from '@/lib/magic-compose/questions';
 import type { Answers } from './answers';
+import { ChunkBoundary } from './ChunkBoundary';
 import { Compose } from './Compose';
 import { Drafting } from './Drafting';
 import { explainDraftFailure, type DraftError, type DraftErrorBody } from './draft-errors';
@@ -15,12 +16,13 @@ import { writeAiDraftWarnings } from './ai-draft-warnings';
 // The questions, and the Drafting from card after them, show only once the AI
 // has replied, so they stay out of the page's first-load JavaScript
 // (budgets.json). A first call starts loading them as it goes out, so they're
-// ready by the time a reply asks.
+// ready by the time a reply asks. A preload that fails is left for the lazy
+// import to retry, and for `ChunkBoundary` to catch when that fails too.
 const Questions = lazy(() => import('./Questions').then((m) => ({ default: m.Questions })));
 
 function preloadQuestions() {
-  void import('./Questions');
-  void import('./DraftingFrom');
+  import('./Questions').catch(() => {});
+  import('./DraftingFrom').catch(() => {});
 }
 
 interface DraftResponse {
@@ -67,6 +69,12 @@ function failed(followUp: FollowUp | null, error: DraftError): Phase {
  * an error rather than spinning forever if the response never arrives.
  */
 const DRAFTING_WATCHDOG_MS = 210_000;
+
+/** When the questions' code won't load, most likely because a deploy replaced it. */
+const PAGE_UPDATED: DraftError = {
+  kind: 'message',
+  text: 'This page has been updated. Reload to continue; copy your description first if you want to keep it.',
+};
 
 export function MagicComposeRoot() {
   const router = useRouter();
@@ -165,6 +173,14 @@ export function MagicComposeRoot() {
     setPhase({ kind: 'idle' });
   }, []);
 
+  // The questions can't show: back to compose, with the description in its
+  // box to copy before a reload. Code that won't load fails before any answer.
+  const onQuestionsUnavailable = useCallback(() => {
+    setQuestions(null);
+    setAnswers(null);
+    setPhase({ kind: 'error', error: PAGE_UPDATED });
+  }, []);
+
   const onCancel = useCallback(() => {
     abortRef.current?.abort();
     abortRef.current = null;
@@ -190,25 +206,37 @@ export function MagicComposeRoot() {
   }
 
   if (phase.kind === 'questions' && questions) {
+    // Until the questions' code is in, the screen goes on reading.
     return (
-      <Suspense>
-        <Questions
-          prompt={prompt}
-          questions={questions}
-          answers={answers}
-          setAnswers={setAnswers}
-          error={
-            phase.error && (
-              <FormError>
-                <DraftErrorText error={phase.error} />
-              </FormError>
-            )
+      <ChunkBoundary fallback={null} onError={onQuestionsUnavailable}>
+        <Suspense
+          fallback={
+            <Drafting
+              prompt={prompt}
+              draft={null}
+              onCancel={onCancel}
+              onAnimationDone={onAnimationDone}
+            />
           }
-          onBack={onBack}
-          onSend={onSend}
-          onInvalid={onInvalid}
-        />
-      </Suspense>
+        >
+          <Questions
+            prompt={prompt}
+            questions={questions}
+            answers={answers}
+            setAnswers={setAnswers}
+            error={
+              phase.error && (
+                <FormError>
+                  <DraftErrorText error={phase.error} />
+                </FormError>
+              )
+            }
+            onBack={onBack}
+            onSend={onSend}
+            onInvalid={onInvalid}
+          />
+        </Suspense>
+      </ChunkBoundary>
     );
   }
 

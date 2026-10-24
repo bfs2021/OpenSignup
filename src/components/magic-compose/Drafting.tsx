@@ -5,10 +5,12 @@ import { Check, Sparkles } from 'lucide-react';
 import type { DraftPreview } from '@/app/api/signups/magic-compose/preview';
 import { useTypewriter } from '@/hooks/useTypewriter';
 import type { FollowUp } from '@/lib/magic-compose/questions';
+import { ChunkBoundary } from './ChunkBoundary';
 import { YouWrote } from './YouWrote';
 
 // Only a call with answers shows it, so it loads with the questions rather
-// than with the page (see `preloadQuestions` in MagicComposeRoot).
+// than with the page (see `preloadQuestions` in MagicComposeRoot). Loading, or
+// if it won't load, the description stands in for it.
 const DraftingFrom = lazy(() =>
   import('./DraftingFrom').then((m) => ({ default: m.DraftingFrom })),
 );
@@ -234,9 +236,11 @@ export function Drafting({
 
         <div className="flex flex-col gap-5 p-6">
           {followUp ? (
-            <Suspense fallback={<YouWrote prompt={prompt} variant="box" />}>
-              <DraftingFrom prompt={prompt} followUp={followUp} />
-            </Suspense>
+            <ChunkBoundary fallback={<YouWrote prompt={prompt} variant="box" />}>
+              <Suspense fallback={<YouWrote prompt={prompt} variant="box" />}>
+                <DraftingFrom prompt={prompt} followUp={followUp} />
+              </Suspense>
+            </ChunkBoundary>
           ) : (
             <YouWrote prompt={prompt} variant="box" />
           )}
