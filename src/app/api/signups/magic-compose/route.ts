@@ -9,7 +9,11 @@ import { link, publicSignupUrl } from '@/lib/links';
 import { log } from '@/lib/log';
 import { consumeRateLimit, RateLimits } from '@/lib/rate-limit';
 import { defaultLlmClient } from '@/lib/magic-compose/llm-client';
-import { buildMessages, MagicComposeDraftSchema } from '@/lib/magic-compose/prompt';
+import {
+  buildMessages,
+  isQuestionsReply,
+  MagicComposeDraftSchema,
+} from '@/lib/magic-compose/prompt';
 import { persistDraft } from '@/lib/magic-compose/persist';
 import { mapMagicComposeError } from './errors';
 import { buildDraftPreview } from './preview';
@@ -109,6 +113,22 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    // Questions: the description doesn't say what people sign up for, so the
+    // model asks instead of drafting. A normal answer, not a failure: no
+    // signup, and the log line says which topics and how many options, never
+    // the options themselves.
+    if (isQuestionsReply(draft.data)) {
+      const { questions } = draft.data;
+      log.info(
+        {
+          topics: questions.topics,
+          options: questions.whatOptions.length,
+          promptLength: userPrompt.length,
+        },
+        'magic-compose asked questions',
+      );
+      return ok({ questions });
+    }
 
     // Client closed the connection between the LLM call and persistence —
     // skip the write so we don't strand a signup the user never sees. This

@@ -10,7 +10,9 @@ import {
   MagicComposeDraftSchema,
   MAX_FIELDS,
   MAX_SLOTS,
+  QuestionsSchema,
   buildMessages,
+  isQuestionsReply,
 } from './prompt';
 
 describe('system prompt', () => {
@@ -222,5 +224,69 @@ describe('draft limits', () => {
         accepts(SignupCreateInputSchema, { title: 'Snack duty', description }),
       );
     }
+  });
+});
+
+describe('QuestionsSchema', () => {
+  const ask = (questions: Record<string, unknown>) => ({ questions });
+  const parse = (v: unknown) => MagicComposeDraftSchema.safeParse(v);
+
+  it('accepts a questions reply and reads it as one', () => {
+    const r = parse(
+      ask({
+        topics: ['what', 'when', 'how_many'],
+        whatOptions: ['Bake something', 'Staff the table'],
+      }),
+    );
+    expect(r.success).toBe(true);
+    if (r.success) expect(isQuestionsReply(r.data)).toBe(true);
+  });
+
+  it('accepts just "what", with up to four options, trimmed', () => {
+    const r = QuestionsSchema.safeParse(
+      ask({ topics: ['what'], whatOptions: [' A ', 'B', 'C', 'D'] }),
+    );
+    expect(r.success && r.data.questions.whatOptions).toEqual(['A', 'B', 'C', 'D']);
+  });
+
+  it.each([
+    ['without what', { topics: ['when', 'how_many'], whatOptions: ['A', 'B'] }],
+    ['with a repeated topic', { topics: ['what', 'what'], whatOptions: ['A', 'B'] }],
+    ['with an unknown topic', { topics: ['what', 'where'], whatOptions: ['A', 'B'] }],
+    ['with no topics', { topics: [], whatOptions: ['A', 'B'] }],
+    ['with one option', { topics: ['what'], whatOptions: ['A'] }],
+    ['with five options', { topics: ['what'], whatOptions: ['A', 'B', 'C', 'D', 'E'] }],
+    ['with the same option twice', { topics: ['what'], whatOptions: ['Bake', 'bake'] }],
+    ['with a blank option', { topics: ['what'], whatOptions: ['A', '  '] }],
+    ['with an option over 40 characters', { topics: ['what'], whatOptions: ['A', 'x'.repeat(41)] }],
+    ['with an extra key inside', { topics: ['what'], whatOptions: ['A', 'B'], wording: 'What?' }],
+  ])('rejects one %s', (_, questions) => {
+    expect(parse(ask(questions)).success).toBe(false);
+  });
+
+  it('rejects a reply that mixes questions with a draft', () => {
+    const draft = {
+      title: 'Bake sale',
+      fields: [{ ref: 'what', label: 'What', fieldType: 'text' }],
+      slots: [{ values: { what: 'TBD: item 1' } }],
+    };
+    expect(
+      parse({ ...draft, questions: { topics: ['what'], whatOptions: ['A', 'B'] } }).success,
+    ).toBe(false);
+    expect(parse({ ...draft, questions: null }).success).toBe(false);
+    expect(parse(draft).success).toBe(true);
+  });
+
+  it('still rejects a reply that is none of draft, refusal or questions', () => {
+    expect(parse({}).success).toBe(false);
+    expect(parse({ answer: 'Sure!' }).success).toBe(false);
+  });
+
+  it('lets a refusal win over anything beside it, as before', () => {
+    const r = parse({
+      refusalReason: 'No.',
+      questions: { topics: ['what'], whatOptions: ['A', 'B'] },
+    });
+    expect(r.success && 'refusalReason' in r.data).toBe(true);
   });
 });

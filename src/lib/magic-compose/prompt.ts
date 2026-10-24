@@ -16,6 +16,8 @@ import {
   SLOTS_ARE_THE_ATOM,
   neverInventRule,
 } from '@/lib/signup-rules';
+import { WHAT_OPTION_MAX_LENGTH, WHAT_OPTIONS_MAX, WHAT_OPTIONS_MIN } from './limits';
+import { QUESTION_TOPICS, type MagicComposeQuestions } from './questions';
 
 export type ChatMessage = {
   role: 'system' | 'user' | 'assistant';
@@ -65,10 +67,54 @@ const RefusalSchema = z.object({
   refusalReason: z.string().min(1).max(500),
 });
 
-export const MagicComposeDraftSchema = z.union([RefusalSchema, FullDraftSchema]);
+/**
+ * The model's answer when the description doesn't say what people sign up
+ * for: which topics are missing, and a few options for "what". Strict at both
+ * levels, because `z.object` drops keys it doesn't know: a reply mixing
+ * questions with half a draft must fail, not pass as whichever arm fits.
+ */
+export const QuestionsSchema = z
+  .object({
+    questions: z
+      .object({
+        topics: z
+          .array(z.enum(QUESTION_TOPICS))
+          .min(1)
+          .max(QUESTION_TOPICS.length)
+          .refine((t) => new Set(t).size === t.length, 'each topic at most once')
+          .refine((t) => t.includes('what'), 'questions always ask what people sign up for'),
+        whatOptions: z
+          .array(z.string().trim().min(1).max(WHAT_OPTION_MAX_LENGTH))
+          .min(WHAT_OPTIONS_MIN)
+          .max(WHAT_OPTIONS_MAX)
+          .refine(
+            (o) => new Set(o.map((x) => x.toLowerCase())).size === o.length,
+            'options must differ',
+          ),
+      })
+      .strict(),
+  })
+  .strict();
+
+/**
+ * A refusal still wins, as it always has (`RefusalSchema` isn't strict). A
+ * reply carrying `questions` is a questions reply and nothing else, so the
+ * draft arm refuses that key; `FullDraftSchema` itself stays as it is, since
+ * the MCP `create_signup` tool validates with it.
+ */
+export const MagicComposeDraftSchema = z.union([
+  RefusalSchema,
+  QuestionsSchema,
+  FullDraftSchema.extend({ questions: z.undefined() }),
+]);
 
 export type MagicComposeDraft = z.infer<typeof FullDraftSchema>;
 export type MagicComposeParsed = z.infer<typeof MagicComposeDraftSchema>;
+
+/** A parsed reply that asks questions instead of drafting. */
+export function isQuestionsReply(p: MagicComposeParsed): p is { questions: MagicComposeQuestions } {
+  return 'questions' in p && p.questions !== undefined;
+}
 
 const SYSTEM_PROMPT = `You are OpenSignup's signup drafter. OpenSignup is a coordination tool where organizers create signups containing slots, and participants commit to slots without ever creating an account.
 
