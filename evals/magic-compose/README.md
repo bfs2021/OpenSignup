@@ -33,13 +33,13 @@ These evals are written against the shape Magic Compose actually produces — no
 
 Value formats per `fieldType`:
 
-| fieldType | shape in `slot.values[ref]` |
-|-----------|-----------------------------|
-| `date`    | `"YYYY-MM-DD"`              |
-| `time`    | `"HH:MM"` (24h)             |
-| `number`  | finite number               |
+| fieldType | shape in `slot.values[ref]`  |
+| --------- | ---------------------------- |
+| `date`    | `"YYYY-MM-DD"`               |
+| `time`    | `"HH:MM"` (24h)              |
+| `number`  | finite number                |
 | `enum`    | one of the field's `choices` |
-| `text`    | trimmed string, ≤200 chars  |
+| `text`    | trimmed string, ≤200 chars   |
 
 Limits: max 20 fields, max 200 slots.
 
@@ -51,7 +51,7 @@ When the prompt doesn't say what people sign up for, the reply is questions inst
 
 ## Core principles (load-bearing)
 
-- **Slots are the atom, not questions.** The generator drafts the *things participants sign up for*, not free-form questions. No `essay`, `favourite-colour`, `goals` text fields.
+- **Slots are the atom, not questions.** The generator drafts the _things participants sign up for_, not free-form questions. No `essay`, `favourite-colour`, `goals` text fields.
 - **No PII fields.** Never `ssn`, `dob`, `home-address`, `driver-license`, `bank-account`, etc., even on request. The prompt-level refusal pattern returns a structured refusal payload `{ refusalReason: string }` — no title, fields, or slots — which the server surfaces to the user without persisting anything.
 - **Don't invent specifics.** No dates, locations, capacities, or opponents the prompt doesn't mention.
 - **Ask only when "what" is missing.** A prompt that doesn't say what people sign up for ("Bake sale") gets questions, and only about what it leaves out. One that says what but not when or how many still drafts, with "TBD:" rows where the slots need dates or times.
@@ -87,17 +87,17 @@ Expectations are structural, not literal-text:
 
 ### Questions
 
-A case with any `questions.*` key expects a questions reply. A draft there fails as `expected_questions_but_drafted`; questions on a case without those keys fail as `unexpected_questions`, as a refusal fails as `unexpected_refusal`. The keys:
+A case expects a questions reply when it says `"questions.must_ask": true`, or, without that key, when it has any other `questions.*` key. `"questions.must_ask": false` expects a draft, whatever other keys the case has. A draft where questions are expected fails as `expected_questions_but_drafted`; questions where they aren't fail as `unexpected_questions`, as a refusal fails as `unexpected_refusal`. The keys:
 
-- `questions.must_ask: true` — the reply is questions.
+- `questions.must_ask: true` — the reply is questions. `false` — it isn't.
 - `questions.topics_must_include` / `questions.topics_must_not_include` / `questions.topics_must_equal` — the topics asked (`what`, `when`, `how_many`); `must_equal` ignores order.
 - `questions.options_count_range: [min, max]` — how many options for "what".
-- `questions.options_must_not_contain_date_or_number: true` — no option holds a digit, a month, a weekday or an English number word (the app asks for dates and counts itself).
+- `questions.options_must_not_contain_date_or_number: true` — no option holds a digit, or a month, a weekday or a number word in English or French, accents ignored (the app asks for dates and counts itself). Not the French "un" and "une", which are also articles.
 - `questions.options_must_mention_any` / `questions.options_must_not_mention_any` — whole words, case and accents ignored, in some option / in no option. The French case uses both to check the options are in French.
 
 ### Answers
 
-A case with `answers` (a `FollowUp`, as the page sends it: `what.picked`, `what.added`, `when`, `howMany`, `placeholders`) runs both calls. The first call gets the prompt alone and must ask; its checks are reported as `first:…`, with the case's `questions.*` keys scored there. Then the prompt goes back with the answers, through `FollowUpSchema` and `buildFollowUpMessages` as in the route, and every other key scores that reply. Questions there fail as `asked_again`. The answers go back even when the first call drafted, since they test the second prompt on its own. The route retries once with a firmer line when the model asks again; the eval doesn't, so any `asked_again` is worth a look. `answers` is not `followUps`, which the MCP runner uses for organizer messages.
+A case with `answers` (a `FollowUp`, as the page sends it: `what.picked`, `what.added`, `when`, `howMany`, `placeholders`) runs both calls. The answers are checked with `FollowUpSchema`, as the route checks them, before either call: a case whose answers fail it is reported as a broken case, and nothing is sent. The first call gets the prompt alone and must ask; its checks are reported as `first:…`, with the case's `questions.*` keys scored there (so `questions.must_ask` can only be `true`). Then the prompt goes back with the answers, through `buildFollowUpMessages` as in the route, and every other key scores that reply. As on the page, `what` always goes back, `when` only if the first call asked about `when`, and `howMany` only if it asked about `how_many`. When the first call didn't ask (it drafted or refused), the answers go back as written, since they test the second prompt on its own. A reply that asks again, in any shape (`asksQuestions`, as the route reads it, so also a partial one such as `{"questions":{"topics":["when"]}}`), fails as `asked_again`. The route retries once with a firmer line when the model asks again; the eval doesn't, so any `asked_again` is worth a look. When the second call fails, its error starts `second call:` and the `first:` checks are still printed. `answers` is not `followUps`, which the MCP runner uses for organizer messages.
 
 Run only the cases about asking with `pnpm eval:magic-compose --tag=questions`.
 
@@ -123,8 +123,9 @@ Per-run JSON snapshots are written to `evals/magic-compose/snapshots/` for local
 - The arguments of its `create_signup` call are the draft that gets scored. Arguments `create_signup` would refuse go back to the model as the same `invalid_input` error the server sends, so it can retry; the snapshot's `trace.rejectedCreates` counts them.
 - `list_workspaces` and `list_signups` answer as a new account with one workspace and no signups; any other tool says nothing matches. Nothing touches a database.
 - A reply with no `create_signup` call is scored as the refusal arm, so `ev_013` passes when the assistant declines. On most other cases it fails as `unexpected_refusal`, with the reply as its detail: an assistant that asks a question first did not build anything.
-- Where Magic Compose would ask (a case with `questions.*` keys), asking the organizer is right for an assistant too, so a reply passes as `asked_before_creating` and a create fails as `expected_questions_but_drafted`. A reply can't be told apart from a refusal, so any reply passes there. A case can also say `"assistant_may_ask": true` where Magic Compose drafts "TBD:" rows but an assistant, told to ask for what the slots need, may ask for the dates instead (`ev_033`, `ev_034`).
+- Where Magic Compose would ask (a case that expects questions, as above), asking the organizer is right for an assistant too, so a reply that asks passes as `asked_before_creating` and a create fails as `expected_questions_but_drafted`. A reply counts as asking when it holds a `?`, a deliberately simple heuristic: an empty reply, or one with no `?` (a refusal, say), fails `asked_before_creating` with a detail saying which. A case can also say `"assistant_may_ask": true` where Magic Compose drafts "TBD:" rows but an assistant, told to ask for what the slots need, may ask for the dates instead (`ev_033`, `ev_034`).
 - Cases with `answers` are skipped: they answer Magic Compose's own questions, which an assistant never asks.
+
 ### Follow-up cases
 
 `evals/mcp/followup-evals.json` holds cases where the organizer says more after the first message. `prompt` is the first message and `followUps` lists the ones after it, each sent once the model has replied in words to the one before. Run only these with `pnpm eval:mcp --tag=follow_up`.

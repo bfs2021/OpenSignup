@@ -8,7 +8,9 @@
  *
  * A reply can be a draft, a refusal or questions. A case with `answers` runs
  * both calls the page makes: the prompt, which must ask, then the prompt with
- * the answers (`buildFollowUpMessages`), whose draft is scored.
+ * the answers (`buildFollowUpMessages`), whose draft is scored. A reply to the
+ * answers that asks again, in any shape, is `asked_again`, as the route reads
+ * it.
  *
  * Usage:
  *   pnpm eval:magic-compose                       # all llm cases
@@ -23,9 +25,10 @@ config({ path: '.env.local' });
 config({ path: '.env' });
 
 import path from 'node:path';
-import { buildFollowUpMessages, FollowUpSchema } from '@/lib/magic-compose/follow-up';
+import { buildFollowUpMessages } from '@/lib/magic-compose/follow-up';
 import { defaultLlmClient } from '@/lib/magic-compose/llm-client';
 import {
+  asksQuestions,
   buildMessages,
   isQuestionsReply,
   MagicComposeDraftSchema,
@@ -38,14 +41,25 @@ function isRefusal(p: MagicComposeParsed): p is { refusalReason: string } {
   return 'refusalReason' in p && typeof p.refusalReason === 'string';
 }
 
-/** One call to the model, read the way the route reads it. */
-async function ask(messages: ChatMessage[]): Promise<Produced> {
+/**
+ * One call to the model, read the way the route reads it. After the answers,
+ * a reply that asks questions in any shape is asked again before the schema
+ * sees it, so a partial re-ask (only "when", with no options) isn't scored as
+ * a broken draft.
+ */
+async function ask(
+  messages: ChatMessage[],
+  { afterAnswers = false }: { afterAnswers?: boolean } = {},
+): Promise<Produced> {
   const client = defaultLlmClient();
   const t0 = Date.now();
   const res = await client.generateDraft(messages);
   const ms = Date.now() - t0;
   if (!res.ok) {
     return { status: 'llm_failed', code: res.error.code, message: res.error.message, ms };
+  }
+  if (afterAnswers && asksQuestions(res.value)) {
+    return { status: 'asked_again', raw: res.value, ms };
   }
 
   const parsed = MagicComposeDraftSchema.safeParse(res.value);
@@ -65,20 +79,8 @@ runEvalCli({
   snapshotDir: path.join(process.cwd(), 'evals/magic-compose/snapshots'),
   schemaName: 'MagicComposeDraftSchema',
   produce: (c) => ask(buildMessages(c.prompt)),
-  async answer(c, answers) {
-    // Checked as the route checks them, so a case can't send answers the page never would.
-    const followUp = FollowUpSchema.safeParse(answers);
-    if (!followUp.success) {
-      const issue = followUp.error.issues[0];
-      return {
-        status: 'llm_failed',
-        code: 'invalid_answers',
-        message: `the case's answers fail FollowUpSchema at ${issue?.path.join('.')}: ${issue?.message}`,
-        ms: 0,
-      };
-    }
-    return ask(buildFollowUpMessages(c.prompt, followUp.data));
-  },
+  // The harness has checked the answers with FollowUpSchema before either call.
+  answer: (c, answers) => ask(buildFollowUpMessages(c.prompt, answers), { afterAnswers: true }),
 }).catch((e) => {
   console.error(e);
   process.exit(1);
