@@ -39,8 +39,13 @@ export function CreateAndPublishASignup() {
             <Note>
               <p>
                 Some sites can fill in a signup for you. If you see <Ui>{UI.composeHeading}</Ui>,
-                describe your signup in a few sentences. Then choose <Ui>{UI.draftCompose}</Ui>, and
-                check every slot before you publish.
+                say what people sign up for, when, and how many of each. Then choose{' '}
+                <Ui>{UI.draftCompose}</Ui>, and check every slot before you publish.
+              </p>
+              <p>
+                If you see <Ui>{UI.questionsHeading}</Ui>, your site is asking a few questions
+                before it fills in your signup. Pick what fits, add your own, or choose{' '}
+                <Ui>{UI.draftWithPlaceholders}</Ui>.
               </p>
               <p>
                 To follow the steps here instead, choose <Ui>{UI.skipCompose}</Ui>.
@@ -170,9 +175,9 @@ export function CreateAndPublishASignup() {
         <h2 className="text-xl font-semibold tracking-tight">What happens next</h2>
         <ul className="list-disc space-y-2 pl-6">
           <li>
-            People open the link and choose <Ui>{UI.signUp}</Ui> on a slot. They type their name
-            and email address, and can add a note. You can make the email address optional, as
-            shown below.
+            People open the link and choose <Ui>{UI.signUp}</Ui> on a slot. They type their name and
+            email address, and can add a note. You can make the email address optional, as shown
+            below.
           </li>
           <li>
             A slot with more than one spot shows how many are left, like 1 left. People can take
@@ -193,8 +198,7 @@ export function CreateAndPublishASignup() {
       <section className="space-y-4">
         <h2 className="text-xl font-semibold tracking-tight">Reminders</h2>
         <p>
-          If a slot has a date, people who take it and gave an email address get a reminder
-          email{' '}
+          If a slot has a date, people who take it and gave an email address get a reminder email{' '}
           {REMINDER_WHEN}. Someone who signs up later than that gets one about {SETTLE} after
           signing up, unless the slot is less than {SETTLE} away. Each reminder has a link to stop
           them.
@@ -230,16 +234,16 @@ export function CreateAndPublishASignup() {
         </h2>
         <p>
           A signup asks people for their email address unless you make it optional. Someone who
-          leaves it blank gets no emails at all, not even reminders. They need to save the link they see after
-          signing up. Only the browser they used remembers it.
+          leaves it blank gets no emails at all, not even reminders. They need to save the link they
+          see after signing up. Only the browser they used remembers it.
         </p>
         <p>To make the email address optional:</p>
         <Steps>
           <Step>
             <p>
               On a phone, the <Ui>{UI.settings}</Ui> link at the very top of the page is for your
-              account, so skip it. Under your signup&apos;s title, choose the{' '}
-              <Ui>{UI.settings}</Ui> tab.
+              account, so skip it. Under your signup&apos;s title, choose the <Ui>{UI.settings}</Ui>{' '}
+              tab.
             </p>
           </Step>
           <Step>
