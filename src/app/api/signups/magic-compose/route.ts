@@ -2,25 +2,54 @@ import type { NextRequest } from 'next/server';
 import { z } from 'zod';
 import { getOrganizerSession, requireActor } from '@/auth/session';
 import { getDb } from '@/db/client';
-import { magicComposeEnabled } from '@/lib/env';
+import { getEnv, magicComposeEnabled } from '@/lib/env';
 import { fail, handle, ok, readJson } from '@/lib/api-response';
 import { serviceError } from '@/lib/errors';
 import { link, publicSignupUrl } from '@/lib/links';
 import { log } from '@/lib/log';
 import { consumeRateLimit, RateLimits } from '@/lib/rate-limit';
+import { buildFollowUpMessages, FollowUpSchema } from '@/lib/magic-compose/follow-up';
 import { defaultLlmClient } from '@/lib/magic-compose/llm-client';
 import {
   buildMessages,
   isQuestionsReply,
   MagicComposeDraftSchema,
+  QuestionsSchema,
 } from '@/lib/magic-compose/prompt';
 import { persistDraft } from '@/lib/magic-compose/persist';
+import type { FollowUp } from '@/lib/magic-compose/questions';
 import { mapMagicComposeError } from './errors';
 import { buildDraftPreview } from './preview';
 
 const PromptBodySchema = z.object({
   prompt: z.string().min(1).max(4000),
+  // The answers to a questions reply. Parsed on its own below, so a bad one
+  // is reported against `followUp` rather than the prompt.
+  followUp: z.unknown().optional(),
 });
+
+/**
+ * The least time worth giving the one retry after the model asked again. With
+ * less of the request's budget left, the retry would most likely time out, so
+ * the organizer is told straight away instead.
+ */
+const RETRY_MIN_MS = 15_000;
+
+/**
+ * The model asked again after the answers, even after the firmer retry (or
+ * there was no time left for one).
+ */
+function askedAgain(followUp: FollowUp) {
+  return fail(
+    serviceError(
+      'invalid_input',
+      followUp.placeholders
+        ? "Couldn't draft this. Try again, or fill it in by hand."
+        : "Couldn't draft from these answers. Add a little more, or draft with placeholders.",
+      { details: { reason: 'asked_again' } },
+    ),
+  );
+}
 
 export async function POST(req: NextRequest) {
   return handle(async () => {
@@ -48,8 +77,8 @@ export async function POST(req: NextRequest) {
     const db = getDb();
 
     // Parse & validate before consuming rate-limit so malformed/empty bodies
-    // don't burn the organizer's 10/hr quota — quota only counts requests we
-    // would actually forward to the upstream LLM.
+    // (or answers) don't burn the organizer's hourly quota — quota only counts
+    // requests we would actually forward to the upstream LLM.
     const body = await readJson(req);
     const parsed = PromptBodySchema.safeParse(body);
     if (!parsed.success) {
@@ -60,11 +89,57 @@ export async function POST(req: NextRequest) {
       );
     }
     const userPrompt = parsed.data.prompt;
+    let followUp: FollowUp | undefined;
+    if (parsed.data.followUp !== undefined) {
+      const answers = FollowUpSchema.safeParse(parsed.data.followUp);
+      if (!answers.success) {
+        return fail(
+          serviceError('invalid_input', answers.error.issues[0]?.message ?? 'invalid answers', {
+            field: 'followUp',
+          }),
+        );
+      }
+      followUp = answers.data;
+    }
 
     await consumeRateLimit(db, RateLimits.magicComposePerOrganizer, actor.id);
 
     const client = defaultLlmClient();
-    const raw = await client.generateDraft(buildMessages(userPrompt), req.signal);
+    // One time budget for the whole request: a follow-up's retry gets what the
+    // first call left, so the organizer never waits twice LLM_TIMEOUT_MS.
+    const deadline = Date.now() + getEnv().LLM_TIMEOUT_MS;
+    let raw = await client.generateDraft(
+      followUp ? buildFollowUpMessages(userPrompt, followUp) : buildMessages(userPrompt),
+      req.signal,
+    );
+
+    // Answers must end in a draft or a refusal, never more questions. A model
+    // that asks anyway gets one firmer retry, on the same quota. The log lines
+    // say how long the description was, never what the answers were.
+    if (followUp && raw.ok && QuestionsSchema.safeParse(raw.value).success) {
+      const left = deadline - Date.now();
+      if (req.signal.aborted || left < RETRY_MIN_MS) {
+        log.warn(
+          { promptLength: userPrompt.length, msLeft: left, aborted: req.signal.aborted },
+          'magic-compose asked again after the answers, with no time to retry',
+        );
+        return askedAgain(followUp);
+      }
+      log.info(
+        { promptLength: userPrompt.length },
+        'magic-compose asked again after the answers; retrying once',
+      );
+      raw = await client.generateDraft(
+        buildFollowUpMessages(userPrompt, followUp, { firmly: true }),
+        req.signal,
+        { timeoutMs: left },
+      );
+      if (raw.ok && QuestionsSchema.safeParse(raw.value).success) {
+        log.warn({ promptLength: userPrompt.length }, 'magic-compose asked again after the retry');
+        return askedAgain(followUp);
+      }
+    }
+
     if (!raw.ok) {
       log.warn({ llmError: raw.error }, 'magic-compose generation failed');
       const mapped = mapMagicComposeError(raw.error);
@@ -116,7 +191,8 @@ export async function POST(req: NextRequest) {
     // Questions: the description doesn't say what people sign up for, so the
     // model asks instead of drafting. A normal answer, not a failure: no
     // signup, and the log line says which topics and how many options, never
-    // the options themselves.
+    // the options themselves. Only a first call gets here: a follow-up's
+    // questions were dealt with above.
     if (isQuestionsReply(draft.data)) {
       const { questions } = draft.data;
       log.info(
