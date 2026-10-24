@@ -1,17 +1,20 @@
 /**
  * What the eval runners share: the cases in evals/magic-compose/dev-evals.json,
- * the DSL that scores a draft against a case's `expect`, and the CLI around
- * it (flags, per-case output, summary, snapshot). Each runner supplies only
- * how a case's prompt becomes a draft: eval-magic-compose.ts asks the Magic
- * Compose prompt, eval-mcp.ts asks a tool-calling model through the MCP tools.
- * A runner can also load more case files and score a case itself (`scored`),
- * as eval-mcp.ts does for its follow-up cases.
+ * the DSL that scores a draft (or the questions Magic Compose asks instead)
+ * against a case's `expect`, and the CLI around it (flags, per-case output,
+ * summary, snapshot). Each runner supplies only how a case's prompt becomes a
+ * draft: eval-magic-compose.ts asks the Magic Compose prompt, eval-mcp.ts asks
+ * a tool-calling model through the MCP tools. A runner can also load more case
+ * files and score a case itself (`scored`), as eval-mcp.ts does for its
+ * follow-up cases, and send a case's `answers` to its questions (`answer`), as
+ * eval-magic-compose.ts does.
  */
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import type { z } from 'zod';
 import { magicComposeEnabled } from '@/lib/env';
 import type { MagicComposeDraft } from '@/lib/magic-compose/prompt';
+import type { FollowUp, MagicComposeQuestions } from '@/lib/magic-compose/questions';
 
 const REPO_ROOT = process.cwd();
 export const DEV_EVALS_FILE = path.join(REPO_ROOT, 'evals/magic-compose/dev-evals.json');
@@ -24,6 +27,12 @@ export interface EvalCase {
   prompt: string;
   /** Organizer messages sent after `prompt`, one turn each. */
   followUps?: string[];
+  /**
+   * The organizer's answers to Magic Compose's questions. The first call must
+   * ask; then the prompt goes back with these, as the page sends them, and
+   * that draft is scored. `questions.*` checks score the first call.
+   */
+  answers?: FollowUp;
   expect: Record<string, unknown>;
 }
 
@@ -45,6 +54,10 @@ interface CaseRun {
   rawOutput?: unknown;
   draft?: MagicComposeDraft;
   refusalReason?: string;
+  /** What Magic Compose asked: the whole reply, or the first call of a case with `answers`. */
+  questions?: MagicComposeQuestions;
+  /** The first call's reply in a case with `answers`; `rawOutput` is the reply to the answers. */
+  firstRawOutput?: unknown;
   /** Runner-specific detail kept in the snapshot, such as the tools a model called. */
   trace?: Record<string, unknown>;
   checks: CheckResult[];
@@ -130,6 +143,50 @@ function fullText(draft: MagicComposeDraft): string {
   return [draft.title, draft.description, fieldText, slotValuesText(draft)].join(' ').toLowerCase();
 }
 
+/** Lowercase with accents dropped, so "Gâteau" and "gateau" compare equal. */
+function fold(s: string): string {
+  return s.normalize('NFD').replace(/\p{M}/gu, '').toLowerCase();
+}
+
+/**
+ * Whether `text` holds `needle` as whole words, both folded. Whole words, so
+ * "sell" doesn't hit inside another word; Unicode-aware, since `\b` isn't.
+ */
+function hasWords(text: string, needle: string): boolean {
+  const escaped = fold(needle).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`(?<![\\p{L}\\p{N}])${escaped}(?![\\p{L}\\p{N}])`, 'u').test(fold(text));
+}
+
+/**
+ * Months, weekdays and English number words: with any digit, what an option
+ * for "what" must never carry, because the app asks for the date and the
+ * counts itself. French too, for the French case. A heuristic that errs
+ * towards flagging ("Help with the May fair" counts).
+ */
+const DATE_OR_NUMBER_WORDS = `
+  january february march april may june july august september october november december
+  monday tuesday wednesday thursday friday saturday sunday today tomorrow tonight
+  one two three four five six seven eight nine ten eleven twelve twenty dozen
+  janvier fevrier mars avril mai juin juillet aout septembre octobre novembre decembre
+  lundi mardi mercredi jeudi vendredi samedi dimanche
+`
+  .trim()
+  .split(/\s+/);
+
+function dateOrNumberIn(option: string): string | null {
+  const digits = /\d+/.exec(option);
+  if (digits) return digits[0];
+  return DATE_OR_NUMBER_WORDS.find((w) => hasWords(option, w)) ?? null;
+}
+
+/** One reply as the checks see it: at most one of draft, refusalReason and questions is set. */
+interface Reply {
+  raw: unknown;
+  draft: MagicComposeDraft | null;
+  refusalReason: string | null;
+  questions: MagicComposeQuestions | null;
+}
+
 function fail(key: string, detail: string): CheckResult {
   return { key, outcome: 'fail', detail };
 }
@@ -146,14 +203,9 @@ function normalizeKey(key: string): string {
   return key.replace(/\.[a-z]$/, '');
 }
 
-function runCheck(
-  rawKey: string,
-  expected: unknown,
-  draft: MagicComposeDraft | null,
-  rawOutput: unknown,
-  refusalReason: string | null = null,
-): CheckResult {
+function runCheck(rawKey: string, expected: unknown, reply: Reply): CheckResult {
   const key = normalizeKey(rawKey);
+  const { raw: rawOutput, refusalReason, questions } = reply;
   const arr = (v: unknown): string[] | null =>
     Array.isArray(v) && v.every((x) => typeof x === 'string') ? (v as string[]) : null;
   const num = (v: unknown): number | null =>
@@ -177,9 +229,83 @@ function runCheck(
     }
   }
 
-  // Every check below needs a full draft (the refusal arm has no fields/slots).
+  // Questions-only check keys: what Magic Compose asked instead of drafting.
+  if (key.startsWith('questions.')) {
+    if (questions === null) return skip(rawKey, 'no questions reply');
+    const topics: readonly string[] = questions.topics;
+    const options = questions.whatOptions;
+    switch (key) {
+      case 'questions.must_ask':
+        return expected === true ? pass(rawKey) : skip(rawKey, 'expected true');
+      case 'questions.topics_must_include': {
+        const a = arr(expected);
+        if (!a) return skip(rawKey, 'expected string[]');
+        const missing = a.filter((t) => !topics.includes(t));
+        return missing.length === 0
+          ? pass(rawKey)
+          : fail(rawKey, `asked about ${JSON.stringify(topics)}, without ${missing.join(', ')}`);
+      }
+      case 'questions.topics_must_not_include': {
+        const a = arr(expected);
+        if (!a) return skip(rawKey, 'expected string[]');
+        const hits = a.filter((t) => topics.includes(t));
+        return hits.length === 0 ? pass(rawKey) : fail(rawKey, `asked about ${hits.join(', ')}`);
+      }
+      case 'questions.topics_must_equal': {
+        const a = arr(expected);
+        if (!a) return skip(rawKey, 'expected string[]');
+        const got = [...topics].sort();
+        const want = [...a].sort();
+        return JSON.stringify(got) === JSON.stringify(want)
+          ? pass(rawKey)
+          : fail(rawKey, `asked about ${JSON.stringify(got)} ≠ ${JSON.stringify(want)}`);
+      }
+      case 'questions.options_count_range': {
+        const a = expected as unknown[];
+        if (!Array.isArray(a) || a.length !== 2) return skip(rawKey, 'expected [min,max]');
+        const [min, max] = a as [number, number];
+        const n = options.length;
+        return n >= min && n <= max
+          ? pass(rawKey)
+          : fail(rawKey, `${n} options not in [${min},${max}]`);
+      }
+      case 'questions.options_must_not_contain_date_or_number': {
+        if (expected !== true) return skip(rawKey, 'expected true');
+        const hits = options.flatMap((o) => {
+          const hit = dateOrNumberIn(o);
+          return hit === null ? [] : [`"${o}" (${hit})`];
+        });
+        return hits.length === 0
+          ? pass(rawKey)
+          : fail(rawKey, `options with a date or number: ${hits.join(', ')}`);
+      }
+      case 'questions.options_must_mention_any': {
+        const a = arr(expected);
+        if (!a) return skip(rawKey, 'expected string[]');
+        return options.some((o) => a.some((w) => hasWords(o, w)))
+          ? pass(rawKey)
+          : fail(rawKey, `options ${JSON.stringify(options)} mention none of ${JSON.stringify(a)}`);
+      }
+      case 'questions.options_must_not_mention_any': {
+        const a = arr(expected);
+        if (!a) return skip(rawKey, 'expected string[]');
+        const hits = options.filter((o) => a.some((w) => hasWords(o, w)));
+        return hits.length === 0
+          ? pass(rawKey)
+          : fail(rawKey, `options with forbidden words: ${JSON.stringify(hits)}`);
+      }
+      default:
+        return skip(rawKey, `unsupported key (extend runner if you need it)`);
+    }
+  }
+
+  // Every check below needs a full draft (the refusal and questions arms have no fields/slots).
+  const draft = reply.draft;
   if (draft === null) {
-    return skip(rawKey, 'not applicable to a refusal payload');
+    return skip(
+      rawKey,
+      questions ? 'not applicable to a questions reply' : 'not applicable to a refusal payload',
+    );
   }
 
   switch (key) {
@@ -490,7 +616,8 @@ function runCheck(
     }
 
     case 'slots.capacity_for_label': {
-      const a = expected as Array<{ label_match: string; capacity: number }> | undefined;
+      // capacity null is no limit, as an answer of "no limit" asks for.
+      const a = expected as Array<{ label_match: string; capacity: number | null }> | undefined;
       if (!Array.isArray(a)) return skip(rawKey, 'expected array');
       for (const req of a) {
         const match = draft.slots.find((s) =>
@@ -563,6 +690,8 @@ function runCheck(
     case 'rationale':
     case 'robustness':
       return skip(rawKey, 'prose-only — not machine-checkable');
+    case 'assistant_may_ask':
+      return skip(rawKey, 'read by eval:mcp, where a reply that asks passes');
 
     default:
       return skip(rawKey, `unsupported key (extend runner if you need it)`);
@@ -572,7 +701,8 @@ function runCheck(
 /**
  * What a runner hands back for one case. `draft` is what gets scored;
  * `refusalReason` takes the refusal arm instead (for Magic Compose its
- * `{ refusalReason }` payload, for the MCP evals a reply with no create).
+ * `{ refusalReason }` payload, for the MCP evals a reply with no create), and
+ * `questions` the questions Magic Compose asks instead of drafting.
  * `scored` carries checks the runner ran itself, for cases the draft DSL
  * can't describe (the MCP follow-up cases).
  */
@@ -581,7 +711,16 @@ export type Produced =
   | { status: 'parse_failed'; raw: unknown; issues: z.ZodIssue[]; ms: number; trace?: Record<string, unknown> }
   | { status: 'draft'; raw: unknown; draft: MagicComposeDraft; ms: number; trace?: Record<string, unknown> }
   | { status: 'refusal'; raw: unknown; refusalReason: string; ms: number; trace?: Record<string, unknown> }
+  | {
+      status: 'questions';
+      raw: unknown;
+      questions: MagicComposeQuestions;
+      ms: number;
+      trace?: Record<string, unknown>;
+    }
   | { status: 'scored'; raw: unknown; checks: CheckResult[]; ms: number; trace?: Record<string, unknown> };
+
+type Reached = Extract<Produced, { status: 'draft' | 'refusal' | 'questions' }>;
 
 export interface EvalRunner {
   /** Where per-run snapshots go (gitignored by evals/**\/snapshots/). */
@@ -591,6 +730,162 @@ export interface EvalRunner {
   /** Case files to run. Defaults to dev-evals.json alone. */
   caseFiles?: readonly string[];
   produce(c: EvalCase): Promise<Produced>;
+  /**
+   * Sends a case's prompt back with its `answers`, as the second call does.
+   * A runner without it skips the cases that have answers.
+   */
+  answer?(c: EvalCase, answers: FollowUp): Promise<Produced>;
+}
+
+/** Which way a case's `expect` says the model should go, other than drafting. */
+function expectsOtherThanDraft(expect: Record<string, unknown>): {
+  refusal: boolean;
+  questions: boolean;
+} {
+  const keys = Object.keys(expect).map(normalizeKey);
+  return {
+    refusal: keys.some(
+      (k) => k === 'refusalReason_must_be_present' || k === 'refusalReason_must_mention_any',
+    ),
+    questions: keys.some((k) => k.startsWith('questions.')),
+  };
+}
+
+/** Whether Magic Compose should ask before it drafts: the case has answers or `questions.*` checks. */
+export function asksFirst(c: EvalCase): boolean {
+  return c.answers !== undefined || expectsOtherThanDraft(c.expect).questions;
+}
+
+/**
+ * Scores one reply against `expect`. A refusal or questions where `expect`
+ * wants neither fails as unexpected, and a draft where it wants questions
+ * fails too. `afterAnswers` names the questions failure for a reply to the
+ * organizer's answers, where questions are never right.
+ */
+function scoreReply(
+  expect: Record<string, unknown>,
+  res: Reached,
+  afterAnswers = false,
+): CheckResult[] {
+  const wants = expectsOtherThanDraft(expect);
+  const reply: Reply = {
+    raw: res.raw,
+    draft: res.status === 'draft' ? res.draft : null,
+    refusalReason: res.status === 'refusal' ? res.refusalReason : null,
+    questions: res.status === 'questions' ? res.questions : null,
+  };
+  const checks: CheckResult[] = [];
+  if (res.status === 'refusal' && !wants.refusal) {
+    checks.push(
+      fail(
+        'unexpected_refusal',
+        `model refused on a happy-path case: "${res.refusalReason.slice(0, 120)}"`,
+      ),
+    );
+  }
+  if (res.status === 'questions' && !wants.questions) {
+    checks.push(
+      fail(
+        afterAnswers ? 'asked_again' : 'unexpected_questions',
+        `asked about ${res.questions.topics.join(', ')} instead of drafting`,
+      ),
+    );
+  }
+  if (res.status === 'draft' && wants.questions) {
+    checks.push(
+      fail(
+        'expected_questions_but_drafted',
+        `drafted "${res.draft.title.slice(0, 60)}" with ${res.draft.slots.length} slot(s)`,
+      ),
+    );
+  }
+  for (const [k, v] of Object.entries(expect)) {
+    checks.push(runCheck(k, v, reply));
+  }
+  return checks;
+}
+
+/** A case run from what the runner produced, scored against `expect`. */
+function toRun(
+  base: CaseRun,
+  expect: Record<string, unknown>,
+  res: Produced,
+  afterAnswers = false,
+): CaseRun {
+  const run: CaseRun = { ...base, tokens: { ms: res.ms } };
+  if (res.trace) run.trace = res.trace;
+
+  if (res.status === 'llm_failed') {
+    return { ...run, status: 'llm_failed', llmErrorCode: res.code, llmErrorMessage: res.message };
+  }
+
+  if (res.status === 'parse_failed') {
+    return {
+      ...run,
+      status: 'parse_failed',
+      rawOutput: res.raw,
+      checks: res.issues.slice(0, 5).map((i) => ({
+        key: `schema:${i.path.join('.') || '(root)'}`,
+        outcome: 'fail' as const,
+        detail: i.message,
+      })),
+    };
+  }
+
+  if (res.status === 'scored') {
+    return { ...run, rawOutput: res.raw, checks: res.checks };
+  }
+
+  const checks = scoreReply(expect, res, afterAnswers);
+  if (res.status === 'refusal') {
+    return { ...run, rawOutput: res.raw, refusalReason: res.refusalReason, checks };
+  }
+  if (res.status === 'questions') {
+    return { ...run, rawOutput: res.raw, questions: res.questions, checks };
+  }
+  return { ...run, rawOutput: res.raw, draft: res.draft, checks };
+}
+
+/**
+ * A case with `answers`, run as the page runs it: the first call must ask,
+ * then the prompt goes back with the answers and that reply is scored. The
+ * answers go back even when the first call drafted, since they test the
+ * second prompt on its own. The first call's checks are marked `first:`.
+ */
+async function runWithAnswers(
+  runner: EvalRunner & { answer: NonNullable<EvalRunner['answer']> },
+  base: CaseRun,
+  c: EvalCase,
+  answers: FollowUp,
+): Promise<CaseRun> {
+  const firstExpect: Record<string, unknown> = { 'questions.must_ask': true };
+  const draftExpect: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(c.expect)) {
+    if (normalizeKey(k).startsWith('questions.')) firstExpect[k] = v;
+    else draftExpect[k] = v;
+  }
+  const first = await runner.produce(c);
+  const markFirst = (checks: CheckResult[]) =>
+    checks.map((ch) => ({ ...ch, key: `first:${ch.key}` }));
+  if (first.status !== 'draft' && first.status !== 'refusal' && first.status !== 'questions') {
+    const run = toRun(base, firstExpect, first);
+    return {
+      ...run,
+      checks: markFirst(run.checks),
+      ...(run.llmErrorMessage ? { llmErrorMessage: `first call: ${run.llmErrorMessage}` } : {}),
+    };
+  }
+
+  const firstChecks = markFirst(scoreReply(firstExpect, first));
+  const second = await runner.answer(c, answers);
+  const run = toRun(base, draftExpect, second, true);
+  return {
+    ...run,
+    checks: [...firstChecks, ...run.checks],
+    ...(first.status === 'questions' ? { questions: first.questions } : {}),
+    firstRawOutput: first.raw,
+    tokens: { ms: first.ms + second.ms },
+  };
 }
 
 async function runOneCase(runner: EvalRunner, c: EvalCase): Promise<CaseRun> {
@@ -611,75 +906,18 @@ async function runOneCase(runner: EvalRunner, c: EvalCase): Promise<CaseRun> {
     };
   }
 
-  const res = await runner.produce(c);
-  const tokens = { ms: res.ms };
-  if (res.trace) base.trace = res.trace;
-
-  if (res.status === 'llm_failed') {
+  if (!c.answers) return toRun(base, c.expect, await runner.produce(c));
+  const { answer } = runner;
+  if (!answer) {
     return {
       ...base,
-      status: 'llm_failed',
-      llmErrorCode: res.code,
-      llmErrorMessage: res.message,
-      tokens,
+      status: 'skipped',
+      checks: [
+        skip('answers', 'answers Magic Compose questions; only eval:magic-compose sends them'),
+      ],
     };
   }
-
-  if (res.status === 'parse_failed') {
-    return {
-      ...base,
-      status: 'parse_failed',
-      rawOutput: res.raw,
-      tokens,
-      checks: res.issues.slice(0, 5).map((i) => ({
-        key: `schema:${i.path.join('.') || '(root)'}`,
-        outcome: 'fail' as const,
-        detail: i.message,
-      })),
-    };
-  }
-
-  if (res.status === 'scored') {
-    return { ...base, rawOutput: res.raw, checks: res.checks, tokens };
-  }
-
-  if (res.status === 'refusal') {
-    const refusalReason = res.refusalReason;
-    const checks: CheckResult[] = [];
-    const expectedRefusal = Object.keys(c.expect).some((k) => {
-      const nk = normalizeKey(k);
-      return (
-        nk === 'refusalReason_must_be_present' ||
-        nk === 'refusalReason_must_mention_any'
-      );
-    });
-    if (!expectedRefusal) {
-      checks.push(
-        fail(
-          'unexpected_refusal',
-          `model refused on a happy-path case: "${refusalReason.slice(0, 120)}"`,
-        ),
-      );
-    }
-    for (const [k, v] of Object.entries(c.expect)) {
-      checks.push(runCheck(k, v, null, res.raw, refusalReason));
-    }
-    return { ...base, rawOutput: res.raw, refusalReason, checks, tokens };
-  }
-
-  const draft = res.draft;
-  const checks: CheckResult[] = [];
-  for (const [k, v] of Object.entries(c.expect)) {
-    checks.push(runCheck(k, v, draft, res.raw));
-  }
-
-  return {
-    ...base,
-    rawOutput: res.raw,
-    draft,
-    checks,
-    tokens,
-  };
+  return runWithAnswers({ ...runner, answer }, base, c, c.answers);
 }
 
 // ── Output ─────────────────────────────────────────────────────────────────
@@ -708,6 +946,10 @@ function printCase(run: CaseRun, schemaName: string): void {
   const fail = run.checks.filter((c) => c.outcome === 'fail').length;
   const skipN = run.checks.filter((c) => c.outcome === 'skip').length;
   console.log(`\n${head}  (${run.tokens?.ms}ms)  ${pass}✓ ${fail}✗ ${skipN}·`);
+  if (run.questions) {
+    const options = run.questions.whatOptions.map((o) => JSON.stringify(o)).join(', ');
+    console.log(`  asked: ${run.questions.topics.join(', ')}  options: ${options}`);
+  }
   if (run.draft) {
     console.log(
       `  title="${run.draft.title.slice(0, 60)}"  fields=${run.draft.fields.length}  slots=${run.draft.slots.length}  groupBy=${run.draft.groupBy ?? 'null'}`,

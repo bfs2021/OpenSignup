@@ -5,7 +5,10 @@
  * against a tool-calling model. The model gets the server instructions and the
  * tools as tools/list describes them, plus one organizer message; the arguments
  * of its create_signup call are scored with the same checks. A reply with no
- * create counts as a refusal, so the refusal cases still mean something. No
+ * create counts as a refusal, so the refusal cases still mean something, except
+ * on a case where Magic Compose would ask (or that says `assistant_may_ask`):
+ * there a reply passes, since asking the organizer is right. Cases with
+ * `answers` are skipped: they answer Magic Compose's own questions. No
  * database: the read tools answer as an empty account (src/mcp/evals/assistant.ts).
  *
  * Also runs the follow-up cases in evals/mcp/followup-evals.json, where the
@@ -42,7 +45,7 @@ import { scoreFollowup } from '@/mcp/evals/followup-checks';
 import { runFollowupCase } from '@/mcp/evals/followups';
 import { buildInstructions } from '@/mcp/instructions';
 import { TOOLS } from '@/mcp/tools';
-import { DEV_EVALS_FILE, runEvalCli } from './lib/eval-harness';
+import { asksFirst, DEV_EVALS_FILE, runEvalCli } from './lib/eval-harness';
 
 const INSTRUCTIONS = buildInstructions(TOOLS);
 
@@ -104,6 +107,18 @@ runEvalCli({
     const trace = { toolCalls: out.toolCalls, rejectedCreates: out.rejectedCreates };
     if (out.kind === 'failed') return { status: 'llm_failed', code: out.code, message: out.message, ms, trace };
     if (out.kind === 'replied') {
+      // Where Magic Compose would ask, an assistant that asks the organizer
+      // instead of creating is right. A reply can't be told apart from a
+      // refusal, so on those cases any reply passes, and elsewhere it is
+      // scored as a refusal.
+      if (asksFirst(c) || c.expect.assistant_may_ask === true) {
+        const asked = {
+          key: 'asked_before_creating',
+          outcome: 'pass' as const,
+          detail: out.text.slice(0, 200),
+        };
+        return { status: 'scored', raw: out.text, checks: [asked], ms, trace };
+      }
       return { status: 'refusal', raw: out.text, refusalReason: out.text || '(empty reply)', ms, trace };
     }
     // runAssistant already checked the arguments against create_signup's own
