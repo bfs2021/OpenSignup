@@ -192,9 +192,9 @@ export default function PrivacyPage() {
         <p>
           Whatever a connected assistant reads under the permissions you approved is then processed
           by that assistant&apos;s vendor under their own terms and privacy policy, not ours. Apart
-          from AI drafting, described under &ldquo;Third parties&rdquo; below, {INSTANCE_NAME}
-          sends nothing to an AI vendor itself: only an app you connected, acting on your
-          instructions, can pull data out.
+          from AI drafting, described under &ldquo;Third parties&rdquo; below,{' '}
+          {INSTANCE_NAME} sends nothing to an AI vendor itself: only an app you connected, acting
+          on your instructions, can pull data out.
         </p>
       </section>
 
