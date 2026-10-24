@@ -2,7 +2,7 @@
 
 import '@testing-library/jest-dom/vitest';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { WHAT_ITEMS_MAX } from '@/lib/magic-compose/limits';
 import type { MagicComposeQuestions } from '@/lib/magic-compose/questions';
 import { MagicComposeRoot } from './MagicComposeRoot';
@@ -12,6 +12,7 @@ vi.mock('next/navigation', () => ({ useRouter: () => ({ push: vi.fn() }) }));
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
+  vi.useRealTimers();
 });
 
 const ASKED: MagicComposeQuestions = {
@@ -265,6 +266,73 @@ describe('<MagicComposeRoot /> questions', () => {
       'The end time must be after the start time.',
     );
     expect(() => sent(1)).toThrow();
+  });
+
+  it("doesn't send a date with a short year, and stops it on the page", async () => {
+    const sent = stubReplies(asks());
+    await openQuestions();
+    const date = screen.getByLabelText('Date');
+    expect(date).toHaveAttribute('min', '1900-01-01');
+    fireEvent.change(date, { target: { value: '0202-11-14' } });
+    fireEvent.click(screen.getByRole('button', { name: /Draft my signup/ }));
+    expect(await screen.findByRole('alert')).toHaveTextContent("Check the date's year.");
+    expect(() => sent(1)).toThrow();
+  });
+
+  it('takes the error away once an answer changes, not before', async () => {
+    stubReplies(asks());
+    await openQuestions();
+    fireEvent.click(screen.getByRole('button', { name: 'Staff the table' }));
+    fireEvent.click(screen.getByRole('button', { name: 'More people for Staff the table' }));
+    fireEvent.change(screen.getByLabelText('Date'), { target: { value: '2026-11-14' } });
+    fireEvent.change(screen.getByLabelText('Start time (optional)'), {
+      target: { value: '13:00' },
+    });
+    fireEvent.change(screen.getByLabelText('End time (optional)'), { target: { value: '09:00' } });
+    fireEvent.click(screen.getByRole('button', { name: /Draft my signup/ }));
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'The end time must be after the start time.',
+    );
+
+    // − at 1, and a count box left as it was, change nothing.
+    fireEvent.click(screen.getByRole('button', { name: 'Fewer people for Staff the table' }));
+    fireEvent.blur(screen.getByRole('spinbutton', { name: 'People for Staff the table' }));
+    expect(screen.getByRole('alert')).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText('End time (optional)'), { target: { value: '14:00' } });
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it("takes a failed call's error away once an answer changes", async () => {
+    stubReplies(asks(), {
+      status: 500,
+      body: { error: { code: 'internal', message: 'Something went wrong while drafting.' } },
+    });
+    await openQuestions();
+    fireEvent.click(screen.getByRole('button', { name: /Draft my signup/ }));
+    expect(await screen.findByRole('alert')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Staff the table' }));
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it("says only to try again when drafting from answers runs too long, as there's no prompt to change", async () => {
+    stubReplies(asks(), 'hang');
+    await openQuestions();
+    fireEvent.click(screen.getByRole('button', { name: 'Staff the table' }));
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    fireEvent.click(screen.getByRole('button', { name: /Draft my signup/ }));
+    expect(screen.getByRole('heading', { name: 'Drafting your signup' })).toBeInTheDocument();
+    act(() => {
+      vi.advanceTimersByTime(210_000);
+    });
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      /^AI drafting is taking longer than expected\. Try again\.$/,
+    );
+    expect(screen.getByRole('heading', { name: 'A few details first' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Staff the table' })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
   });
 
   it('goes Back to compose with the answers added to the description, then starts fresh', async () => {

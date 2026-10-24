@@ -1,4 +1,5 @@
 import {
+  EARLIEST_DATE_YEAR,
   HOW_MANY_MAX,
   WHAT_ITEM_MAX_LENGTH,
   WHAT_ITEMS_MAX,
@@ -6,6 +7,7 @@ import {
 } from '@/lib/magic-compose/limits';
 import {
   followUpItems,
+  tidyText,
   type FollowUp,
   type MagicComposeQuestions,
   type WhenAnswer,
@@ -44,11 +46,6 @@ export const NO_ANSWERS: Answers = {
   counts: {},
 };
 
-/** Trimmed, with every run of whitespace (newlines too) made one space, as the server reads it. */
-function tidy(text: string): string {
-  return text.replace(/\s+/g, ' ').trim();
-}
-
 const same = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
 
 export function answeredItems(answers: Answers): string[] {
@@ -73,7 +70,7 @@ export function togglePick(answers: Answers, option: string, options: string[]):
  * is dropped, so nothing appears twice.
  */
 export function addPending(answers: Answers, options: string[]): Answers {
-  const text = tidy(answers.pending).slice(0, WHAT_ITEM_MAX_LENGTH);
+  const text = tidyText(answers.pending).slice(0, WHAT_ITEM_MAX_LENGTH);
   const cleared = { ...answers, pending: '' };
   if (!text || answeredItems(answers).some((item) => same(item, text))) return cleared;
   const option = options.find((o) => same(o, text));
@@ -110,7 +107,7 @@ function whenAnswer(answers: Answers): WhenAnswer {
       ...(answers.to ? { to: answers.to } : {}),
     };
   }
-  const text = tidy(answers.several).slice(0, WHEN_TEXT_MAX_LENGTH);
+  const text = tidyText(answers.several).slice(0, WHEN_TEXT_MAX_LENGTH);
   if (answers.when === 'several' && text) return { kind: 'several', text };
   // "One day" with no date, or "Several days" left empty, says no more than "Not decided".
   return { kind: 'not_decided' };
@@ -148,10 +145,25 @@ export function buildFollowUp(
   };
 }
 
+/**
+ * Whether two sets of boxes hold the same answers. Every change builds the
+ * next set from the last by spreading it, so keys keep their order and equal
+ * answers serialize the same.
+ */
+export function sameAnswers(a: Answers, b: Answers): boolean {
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
 /** Why these answers can't go yet, in the words the screen shows, or null. */
 export function answersProblem(followUp: FollowUp): string | null {
   const when = followUp.when;
-  if (when?.kind === 'one_day' && when.from && when.to && when.from >= when.to) {
+  if (when?.kind !== 'one_day') return null;
+  // A short year is an easy slip in a date box (202 becomes 0202), and the
+  // server refuses a year before EARLIEST_DATE_YEAR, or one that isn't four
+  // digits, as not a real day.
+  const year = when.date.split('-')[0] ?? '';
+  if (year.length !== 4 || Number(year) < EARLIEST_DATE_YEAR) return "Check the date's year.";
+  if (when.from && when.to && when.from >= when.to) {
     return 'The end time must be after the start time.';
   }
   return null;
