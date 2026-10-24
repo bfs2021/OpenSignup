@@ -102,7 +102,10 @@ export const RateLimits = {
   // and unmetered DB hits.
   commitmentTokenOpsPerIp: { bucket: 'commit.token.ip', max: 30, windowSeconds: 60 },
   signupCreatePerOrganizer: { bucket: 'signup.create', max: 60, windowSeconds: 3600 },
-  magicComposePerOrganizer: { bucket: MAGIC_COMPOSE_BUCKET, max: 10, windowSeconds: 3600 },
+  // Every call to the AI counts, so a description that gets questions takes
+  // two: the first call and the one with the answers (the route's retry after
+  // the answers is free). 12 rather than 10 makes up for a couple of those.
+  magicComposePerOrganizer: { bucket: MAGIC_COMPOSE_BUCKET, max: 12, windowSeconds: 3600 },
   // Unsubscribe is unauthenticated and token-guarded. Generous on purpose:
   // RFC 8058 one-click POSTs arrive from a handful of provider egress IPs on
   // behalf of every recipient, so a tight per-IP cap would become an

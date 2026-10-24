@@ -48,7 +48,7 @@ export async function POST(req: NextRequest) {
     const db = getDb();
 
     // Parse & validate before consuming rate-limit so malformed/empty bodies
-    // don't burn the organizer's 10/hr quota — quota only counts requests we
+    // don't burn the organizer's hourly quota — quota only counts requests we
     // would actually forward to the upstream LLM.
     const body = await readJson(req);
     const parsed = PromptBodySchema.safeParse(body);
