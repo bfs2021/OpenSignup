@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { and, eq, like } from 'drizzle-orm';
+import { and, eq, inArray } from 'drizzle-orm';
 import { NextRequest } from 'next/server';
 import { getDb } from '@/db/client';
 import { activity } from '@/db/schema/activity';
@@ -161,6 +161,7 @@ async function signupsMade(): Promise<number> {
 }
 
 /** The workspace's Magic Compose telemetry rows, oldest first. */
+/** The questions round's own rows; #525's magic_compose.failed has its own tests. */
 async function composeRows() {
   return getDb()
     .select({
@@ -171,7 +172,12 @@ async function composeRows() {
       payload: activity.payload,
     })
     .from(activity)
-    .where(and(eq(activity.workspaceId, workspaceId), like(activity.eventType, 'magic_compose.%')))
+    .where(
+      and(
+        eq(activity.workspaceId, workspaceId),
+        inArray(activity.eventType, ['magic_compose.asked', 'magic_compose.answered']),
+      ),
+    )
     .orderBy(activity.occurredAt);
 }
 

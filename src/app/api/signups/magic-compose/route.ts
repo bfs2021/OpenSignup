@@ -1,15 +1,17 @@
 import type { NextRequest } from 'next/server';
 import { z } from 'zod';
 import { getOrganizerSession, requireActor } from '@/auth/session';
-import { getDb } from '@/db/client';
+import { getDb, type Db } from '@/db/client';
+import { activityActor, recordActivityBestEffort } from '@/lib/activity';
 import { getEnv, magicComposeEnabled } from '@/lib/env';
 import { fail, handle, ok, readJson } from '@/lib/api-response';
-import { serviceError } from '@/lib/errors';
+import { serviceError, ServiceException } from '@/lib/errors';
 import { link, publicSignupUrl } from '@/lib/links';
 import { log } from '@/lib/log';
 import { consumeRateLimit, RateLimits } from '@/lib/rate-limit';
 import { buildFollowUpMessages, FollowUpSchema } from '@/lib/magic-compose/follow-up';
-import { defaultLlmClient } from '@/lib/magic-compose/llm-client';
+import { defaultLlmClient, type MagicComposeErrorCode } from '@/lib/magic-compose/llm-client';
+import type { Actor } from '@/lib/policy';
 import {
   asksQuestions,
   buildMessages,
@@ -28,6 +30,27 @@ const PromptBodySchema = z.object({
   // is reported against `followUp` rather than the prompt.
   followUp: z.unknown().optional(),
 });
+
+/**
+ * Telemetry for a draft that came back with nothing to show, so "tried the
+ * AI, it failed, gave up" can be counted. The code only: never the prompt or
+ * the model's words. Best effort, outside any transaction, as it describes no
+ * change. A questions reply is an answer, not a failure, so it never gets
+ * one; `asked_again` is the model asking again after the answers.
+ */
+async function recordFailed(
+  db: Db,
+  actor: Actor,
+  workspaceId: string,
+  code: MagicComposeErrorCode | 'refusal' | 'not_saved' | 'over_limit' | 'asked_again',
+): Promise<void> {
+  await recordActivityBestEffort(db, {
+    workspaceId,
+    actor: activityActor(actor),
+    eventType: 'magic_compose.failed',
+    payload: { code },
+  });
+}
 
 /**
  * The least time worth giving the one retry after the model asked again. With
@@ -108,7 +131,16 @@ export async function POST(req: NextRequest) {
       followUp = answers.data;
     }
 
-    await consumeRateLimit(db, RateLimits.magicComposePerOrganizer, actor.id);
+    try {
+      await consumeRateLimit(db, RateLimits.magicComposePerOrganizer, actor.id);
+    } catch (e) {
+      // The organizer used up this instance's quota: as much a failed draft to
+      // them as the provider's own limit, so it's counted, then answered 429.
+      if (e instanceof ServiceException && e.serviceError.code === 'rate_limited') {
+        await recordFailed(db, actor, session.defaultWorkspaceId, 'over_limit');
+      }
+      throw e;
+    }
 
     const workspaceId = session.defaultWorkspaceId;
     const outcome: FollowUpOutcome = { retried: false, gaveUp: false };
@@ -137,6 +169,12 @@ export async function POST(req: NextRequest) {
           { promptLength: userPrompt.length, msLeft: left, aborted: req.signal.aborted },
           'magic-compose asked again after the answers, with no time to retry',
         );
+        await recordFailed(
+          db,
+          actor,
+          session.defaultWorkspaceId,
+          req.signal.aborted ? 'aborted' : 'asked_again',
+        );
         return askedAgain(followUp);
       }
       log.info(
@@ -152,12 +190,14 @@ export async function POST(req: NextRequest) {
       if (raw.ok && asksQuestions(raw.value)) {
         outcome.gaveUp = true;
         log.warn({ promptLength: userPrompt.length }, 'magic-compose asked again after the retry');
+        await recordFailed(db, actor, session.defaultWorkspaceId, 'asked_again');
         return askedAgain(followUp);
       }
     }
 
     if (!raw.ok) {
       log.warn({ llmError: raw.error }, 'magic-compose generation failed');
+      await recordFailed(db, actor, session.defaultWorkspaceId, raw.error.code);
       const mapped = mapMagicComposeError(raw.error);
       const details: Record<string, unknown> = {
         llmErrorCode: raw.error.code,
@@ -174,6 +214,7 @@ export async function POST(req: NextRequest) {
     const draft = MagicComposeDraftSchema.safeParse(raw.value);
     if (!draft.success) {
       log.warn({ issues: draft.error.issues.slice(0, 5), raw: raw.value }, 'magic-compose draft failed Zod');
+      await recordFailed(db, actor, session.defaultWorkspaceId, 'schema_mismatch');
       // Drop `received` and `path` from issues before returning to the client.
       // `received` echoes the raw LLM output back into the response envelope,
       // bypassing pino redaction and potentially leaking provider-generated
@@ -190,14 +231,16 @@ export async function POST(req: NextRequest) {
     }
 
     // Structured refusal: model returned only `refusalReason`. Surface the
-    // reason to the user without creating a signup or burning further work
-    // (a follow-up's magic_compose.answered row is still written, as for any
-    // ending). Rate-limit stays consumed (the LLM call did happen).
+    // reason to the user without creating a signup or burning further work;
+    // the failed row says only that it was a refusal (and a follow-up's
+    // answered row is still written, as for any ending). Rate-limit stays
+    // consumed (the LLM call did happen).
     if ('refusalReason' in draft.data) {
       log.info(
         { refusalReason: draft.data.refusalReason, promptLength: userPrompt.length },
         'magic-compose refusal returned by model',
       );
+      await recordFailed(db, actor, session.defaultWorkspaceId, 'refusal');
       return fail(
         serviceError('invalid_input', draft.data.refusalReason, {
           details: { reason: 'refusal' },
@@ -235,13 +278,17 @@ export async function POST(req: NextRequest) {
         { promptLength: userPrompt.length },
         'magic-compose request aborted before persistence',
       );
+      await recordFailed(db, actor, session.defaultWorkspaceId, 'aborted');
       return fail(serviceError('internal', 'request cancelled'));
     }
 
     const persisted = await persistDraft(db, actor, session.defaultWorkspaceId, draft.data, {
       logContext: { promptLength: userPrompt.length },
     });
-    if (!persisted.ok) return fail(persisted.error);
+    if (!persisted.ok) {
+      await recordFailed(db, actor, session.defaultWorkspaceId, 'not_saved');
+      return fail(persisted.error);
+    }
     const { signup: created, template, groupByFieldRefs, warnings } = persisted.value;
 
     return ok(
