@@ -70,10 +70,13 @@ function failed(followUp: FollowUp | null, error: DraftError): Phase {
  */
 const DRAFTING_WATCHDOG_MS = 210_000;
 
-/** When the questions' code won't load, most likely because a deploy replaced it. */
-const PAGE_UPDATED: DraftError = {
+/**
+ * When the questions can't show: their code won't load, most likely because a
+ * deploy replaced it, or they throw while rendering.
+ */
+const QUESTIONS_UNAVAILABLE: DraftError = {
   kind: 'message',
-  text: 'This page has been updated. Reload to continue; copy your description first if you want to keep it.',
+  text: "The questions couldn't be shown. Reload the page and try again; copy your description first if you want to keep it.",
 };
 
 export function MagicComposeRoot() {
@@ -97,12 +100,16 @@ export function MagicComposeRoot() {
     const timer = setTimeout(() => {
       abortRef.current?.abort();
       abortRef.current = null;
-      setPhase((p) =>
-        failed(p.kind === 'drafting' ? p.followUp : null, {
+      setPhase((p) => {
+        const followUp = p.kind === 'drafting' ? p.followUp : null;
+        // A call with answers comes back to the questions, where there's no prompt to simplify.
+        return failed(followUp, {
           kind: 'message',
-          text: 'AI drafting is taking longer than expected. Try again or simplify your prompt.',
-        }),
-      );
+          text: followUp
+            ? 'AI drafting is taking longer than expected. Try again.'
+            : 'AI drafting is taking longer than expected. Try again or simplify your prompt.',
+        });
+      });
     }, DRAFTING_WATCHDOG_MS);
     return () => clearTimeout(timer);
   }, [phase.kind]);
@@ -174,11 +181,11 @@ export function MagicComposeRoot() {
   }, []);
 
   // The questions can't show: back to compose, with the description in its
-  // box to copy before a reload. Code that won't load fails before any answer.
+  // box to copy before a reload.
   const onQuestionsUnavailable = useCallback(() => {
     setQuestions(null);
     setAnswers(null);
-    setPhase({ kind: 'error', error: PAGE_UPDATED });
+    setPhase({ kind: 'error', error: QUESTIONS_UNAVAILABLE });
   }, []);
 
   const onCancel = useCallback(() => {

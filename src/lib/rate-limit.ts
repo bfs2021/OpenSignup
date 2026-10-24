@@ -105,6 +105,10 @@ export const RateLimits = {
   // two: the first call and the one with the answers (the route's retry after
   // the answers is free). 12 rather than 10 makes up for a couple of those.
   magicComposePerOrganizer: { bucket: 'magic.compose', max: 12, windowSeconds: 3600 },
+  // The organizer's link-copy beacon. Signed in, but a viewer can send it too,
+  // and each one is a row in the append-only activity log, so it is metered.
+  // Far above a person copying a link: past it, copies just go uncounted.
+  signupLinkEventsPerOrganizer: { bucket: 'signup.link_events', max: 60, windowSeconds: 3600 },
   // Unsubscribe is unauthenticated and token-guarded. Generous on purpose:
   // RFC 8058 one-click POSTs arrive from a handful of provider egress IPs on
   // behalf of every recipient, so a tight per-IP cap would become an

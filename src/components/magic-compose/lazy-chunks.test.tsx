@@ -38,7 +38,7 @@ describe('lazy parts of Magic Compose that fail to load', () => {
     fireEvent.click(screen.getByRole('button', { name: /Draft my signup/ }));
 
     expect(await screen.findByRole('alert')).toHaveTextContent(
-      'This page has been updated. Reload to continue; copy your description first if you want to keep it.',
+      "The questions couldn't be shown. Reload the page and try again; copy your description first if you want to keep it.",
     );
     expect(screen.getByRole('heading', { name: 'What are you organizing?' })).toBeInTheDocument();
     expect(screen.getByRole('textbox', { name: 'Describe your signup' })).toHaveValue('Bake sale');

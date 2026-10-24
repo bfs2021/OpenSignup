@@ -4,7 +4,7 @@ Developer evals for OpenSignup's Magic Compose feature (natural-language to sign
 
 ## Files
 
-- `dev-evals.json` — 36-case developer eval suite, shared by the Magic Compose and MCP runners, covering each `fieldType`, cross-product/groupBy correctness, edge cases, multilingual input, hostile prompts, when Magic Compose asks questions instead of drafting, and the server invariants that hold regardless of model output.
+- `dev-evals.json` — 37-case developer eval suite, shared by the Magic Compose and MCP runners, covering each `fieldType`, cross-product/groupBy correctness, capacity instead of duplicate rows, edge cases, multilingual input, hostile prompts, when Magic Compose asks questions instead of drafting, and the server invariants that hold regardless of model output.
 
 The user-facing starter prompts (School, Sports, Volunteering) shipped in the UI as click-to-try chips live in the Magic Compose UI code, not as a JSON file in this directory.
 
@@ -123,7 +123,7 @@ Per-run JSON snapshots are written to `evals/magic-compose/snapshots/` for local
 - The arguments of its `create_signup` call are the draft that gets scored. Arguments `create_signup` would refuse go back to the model as the same `invalid_input` error the server sends, so it can retry; the snapshot's `trace.rejectedCreates` counts them.
 - `list_workspaces` and `list_signups` answer as a new account with one workspace and no signups; any other tool says nothing matches. Nothing touches a database.
 - A reply with no `create_signup` call is scored as the refusal arm, so `ev_013` passes when the assistant declines. On most other cases it fails as `unexpected_refusal`, with the reply as its detail: an assistant that asks a question first did not build anything.
-- Where Magic Compose would ask (a case that expects questions, as above), asking the organizer is right for an assistant too, so a reply that asks passes as `asked_before_creating` and a create fails as `expected_questions_but_drafted`. A reply counts as asking when it holds a `?`, a deliberately simple heuristic: an empty reply, or one with no `?` (a refusal, say), fails `asked_before_creating` with a detail saying which. A case can also say `"assistant_may_ask": true` where Magic Compose drafts "TBD:" rows but an assistant, told to ask for what the slots need, may ask for the dates instead (`ev_033`, `ev_034`).
+- Where Magic Compose would ask (a case that expects questions, as above), asking the organizer is right for an assistant too, so a reply that asks passes as `asked_before_creating` and a create fails as `expected_questions_but_drafted`. A reply counts as asking when it holds a `?`, a deliberately simple heuristic: an empty reply, or one with no `?` (a refusal, say), fails `asked_before_creating` with a detail saying which. A case can also say `"assistant_may_ask": true` where Magic Compose drafts "TBD:" rows but an assistant, told to ask for what the slots need, may ask for the dates instead (`ev_034`, `ev_035`).
 - Cases with `answers` are skipped: they answer Magic Compose's own questions, which an assistant never asks.
 
 ### Follow-up cases
@@ -155,4 +155,5 @@ When adding a case:
 - Empty prompt rejected with `invalid_input` before LLM call (`ev_014`).
 - No PII fields, no tenant IDs in model output (`ev_012`, `ev_020`).
 - Refusal pattern on hostile prompts (`ev_013`).
-- Questions, not placeholder rows, for a prompt that doesn't say what people sign up for (`ev_008`, which drafted 1-6 slots until #570, and `ev_027`–`ev_030`); drafts for near misses (`ev_031`–`ev_034`); drafts from the answers (`ev_035`, `ev_036`).
+- Questions, not placeholder rows, for a prompt that doesn't say what people sign up for (`ev_008`, which drafted 1-6 slots until #570, and `ev_028`–`ev_031`); drafts for near misses (`ev_032`–`ev_035`); drafts from the answers (`ev_036`, `ev_037`).
+- Several people for the same thing is one slot with a capacity, not a row per person: shifts that each need several volunteers, several parents per game, and the "Classroom or school" starter prompt word for word, whose potluck is one slot per dish type (`ev_005`, `ev_006`, `ev_026`, `ev_027`). `ev_025` is the counter-case, one parent per game at capacity 1. Run them together with `--tag=capacity_not_duplicate_rows`.

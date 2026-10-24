@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
+import { EARLIEST_DATE_YEAR } from '@/lib/magic-compose/limits';
 import type { MagicComposeQuestions } from '@/lib/magic-compose/questions';
+import { isRealDate, MIN_DATE_YEAR } from '@/lib/reminder-fields';
 import {
   addPending,
   answersProblem,
@@ -7,6 +9,7 @@ import {
   buildFollowUp,
   NO_ANSWERS,
   parseCount,
+  sameAnswers,
   stepCount,
   togglePick,
   type Answers,
@@ -96,6 +99,32 @@ describe('answersProblem', () => {
       'The end time must be after the start time.',
     );
     expect(answersProblem(buildFollowUp(ALL, answered))).toBeNull();
+  });
+
+  it('stops a date the server would refuse for its year, as a short year typed in', () => {
+    for (const date of ['0202-11-14', '1899-12-31', '20260-11-14']) {
+      expect(answersProblem(buildFollowUp(ALL, { ...answered, date }))).toBe(
+        "Check the date's year.",
+      );
+      expect(isRealDate(date)).toBe(false);
+    }
+    expect(answersProblem(buildFollowUp(ALL, { ...answered, date: '1900-01-01' }))).toBeNull();
+    expect(isRealDate('1900-01-01')).toBe(true);
+  });
+
+  it("takes the server's earliest year", () => {
+    expect(EARLIEST_DATE_YEAR).toBe(MIN_DATE_YEAR);
+  });
+});
+
+describe('sameAnswers', () => {
+  it('tells a real change from boxes left as they were', () => {
+    expect(sameAnswers(answered, { ...answered, counts: { ...answered.counts } })).toBe(true);
+    expect(sameAnswers(answered, { ...answered, to: '14:00' })).toBe(false);
+    expect(sameAnswers(answered, { ...answered, picked: ['Staff the table'] })).toBe(false);
+    expect(
+      sameAnswers(answered, { ...answered, counts: { ...answered.counts, 'Bring drinks': '2' } }),
+    ).toBe(false);
   });
 });
 

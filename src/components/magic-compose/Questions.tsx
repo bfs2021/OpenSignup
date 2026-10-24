@@ -4,6 +4,7 @@ import {
   useEffect,
   useId,
   useRef,
+  useState,
   type Dispatch,
   type ReactNode,
   type SetStateAction,
@@ -12,6 +13,7 @@ import { flushSync } from 'react-dom';
 import Link from 'next/link';
 import { Check, ChevronLeft, Minus, Plus, Sparkles, X } from 'lucide-react';
 import {
+  EARLIEST_DATE_YEAR,
   HOW_MANY_MAX,
   WHAT_ITEM_MAX_LENGTH,
   WHAT_ITEMS_MAX,
@@ -28,6 +30,7 @@ import {
   NO_ANSWERS,
   parseCount,
   removeAdded,
+  sameAnswers,
   stepCount,
   togglePick,
   type Answers,
@@ -76,7 +79,7 @@ export function Questions({
   /** The boxes as the organizer left them; null until they answer anything. */
   answers: Answers | null;
   setAnswers: Dispatch<SetStateAction<Answers | null>>;
-  /** Why the last try failed, already in its `FormError`. */
+  /** Why the last try failed, already in its `FormError`. Hidden once an answer changes. */
   error: ReactNode;
   /** Back to compose, with the description and the answers so far as one text. */
   onBack: (description: string) => void;
@@ -89,8 +92,17 @@ export function Questions({
     headingRef.current?.focus();
   }, []);
 
+  // Once an answer changes, `error` no longer speaks to what's in the boxes.
+  // The next try brings its own: `onInvalid` below, or a failed call, which
+  // comes back to a new screen.
+  const [edited, setEdited] = useState(false);
+
   const answers = held ?? NO_ANSWERS;
-  const update = (change: (a: Answers) => Answers) => setAnswers((a) => change(a ?? NO_ANSWERS));
+  const update = (change: (a: Answers) => Answers) => {
+    // Only a real change: − at 1, or a count box left as it was, isn't one.
+    if (!sameAnswers(change(answers), answers)) setEdited(true);
+    setAnswers((a) => change(a ?? NO_ANSWERS));
+  };
   const asks = (topic: Topic) => questions.topics.includes(topic);
   // Words left in "Add your own" go as an item: nothing typed is dropped.
   const committed = () => addPending(answers, questions.whatOptions);
@@ -100,8 +112,10 @@ export function Questions({
     setAnswers(done);
     const followUp = buildFollowUp(questions, done);
     const problem = answersProblem(followUp);
-    if (problem) onInvalid(problem);
-    else onSend(followUp);
+    if (problem) {
+      setEdited(false);
+      onInvalid(problem);
+    } else onSend(followUp);
   };
 
   return (
@@ -130,7 +144,7 @@ export function Questions({
 
       <YouWrote prompt={prompt} variant="line" />
 
-      {error}
+      {!edited && error}
 
       <div className="overflow-hidden rounded-lg border border-surface-sunk bg-white shadow-card">
         <div className="divide-y divide-surface-sunk">
@@ -356,6 +370,7 @@ function When({ answers, update }: Part) {
           <input
             id={`${id}date`}
             type="date"
+            min={`${EARLIEST_DATE_YEAR}-01-01`}
             max="9999-12-31"
             value={answers.date}
             onChange={(e) => set({ date: e.target.value })}
