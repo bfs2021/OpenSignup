@@ -76,7 +76,7 @@ const DRAFTING_WATCHDOG_MS = 210_000;
  */
 const QUESTIONS_UNAVAILABLE: DraftError = {
   kind: 'message',
-  text: "The questions couldn't be shown. Reload and try again; copy your description first if you want to keep it.",
+  text: "The questions couldn't be shown. Reload the page and try again; copy your description first if you want to keep it.",
 };
 
 export function MagicComposeRoot() {
