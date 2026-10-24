@@ -8,13 +8,13 @@ import {
   WHEN_TEXT_MAX_LENGTH,
 } from './limits';
 import { buildMessages, type ChatMessage } from './prompt';
-import { followUpItems, type FollowUp, type WhenAnswer } from './questions';
+import { followUpItems, tidyText, type FollowUp, type WhenAnswer } from './questions';
 
-/** Trimmed, with every run of whitespace (newlines too) made one space. */
+/** Text through `tidyText`, then checked for length. */
 function tidy(max: number, what: string) {
   return z
     .string()
-    .transform((s) => s.replace(/\s+/g, ' ').trim())
+    .transform(tidyText)
     .pipe(
       z
         .string()
