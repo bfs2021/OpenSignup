@@ -56,11 +56,12 @@ export default function PrivacyPage() {
           <li>The signups, slots, and settings you create.</li>
           <li>
             An append-only activity log of organizer actions (sign-ins, creating and editing
-            signups, sending magic links), participant commitments on your signups, and reminder
-            dispatches. This exists so an organizer can audit what happened in their own workspace
-            and so the operator can investigate abuse. The same log records anonymous view telemetry
-            on the marketing home page and on your public signup pages (see &ldquo;Logs and
-            rate-limiting&rdquo; below).
+            signups, sending magic links, and whether AI drafting asked you questions and how you
+            answered them, in counts only, never what you or the AI wrote), participant commitments
+            on your signups, and reminder dispatches. This exists so an organizer can audit what
+            happened in their own workspace and so the operator can investigate abuse. The same log
+            records anonymous view telemetry on the marketing home page and on your public signup
+            pages (see &ldquo;Logs and rate-limiting&rdquo; below).
           </li>
           <li>
             After a sign-in email is sent, the sign-in link&apos;s token (stored as a hash, next to
@@ -210,10 +211,11 @@ export default function PrivacyPage() {
         </p>
         <p>
           If the operator has turned on AI drafting, what an organizer types into it to describe
-          their signup is sent to the AI provider the operator configured, which turns it into a
-          draft. Nothing else about you goes with it, and nothing about participants. The provider
-          handles it under its own terms. To keep a description away from the provider, skip AI
-          drafting and fill the signup in by hand.
+          their signup, along with any answers they give to the questions it asks, is sent to the AI
+          provider the operator configured, which turns it into a draft. Nothing else about you goes
+          with it, and nothing about participants. The provider handles it under its own terms. To
+          keep a description away from the provider, skip AI drafting and fill the signup in by
+          hand.
         </p>
         <p>
           If third-party sign-in (for example, Google) is enabled and you choose it, you
