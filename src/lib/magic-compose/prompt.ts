@@ -216,19 +216,19 @@ OUTPUT:
 
 Example D — says what but not when, so draft with placeholders:
 
-USER: "Snack duty for the soccer team, two families per game"
+USER: "Ushers for the school play, two parents per performance"
 
 OUTPUT:
 {
-  "title": "Soccer team snack duty",
-  "description": "Two families bring snacks to each game. Replace these placeholder games with the real dates.",
+  "title": "School play ushers",
+  "description": "Two parents usher at each performance. Replace these placeholder performances with the real dates.",
   "fields": [
-    { "ref": "game", "label": "Game", "fieldType": "text", "choices": [] }
+    { "ref": "performance", "label": "Performance", "fieldType": "text", "choices": [] }
   ],
   "slots": [
-    { "values": { "game": "TBD: game 1" }, "capacity": 2 },
-    { "values": { "game": "TBD: game 2" }, "capacity": 2 },
-    { "values": { "game": "TBD: game 3" }, "capacity": 2 }
+    { "values": { "performance": "TBD: performance 1" }, "capacity": 2 },
+    { "values": { "performance": "TBD: performance 2" }, "capacity": 2 },
+    { "values": { "performance": "TBD: performance 3" }, "capacity": 2 }
   ],
   "groupBy": null
 }

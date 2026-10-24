@@ -39,7 +39,7 @@ describe('neverInventRule', () => {
   it('tells the drafter to ask when the prompt does not say what people sign up for', () => {
     // The vague soccer prompt used to get placeholder slots; it gets questions now.
     expect(neverInventRule('drafter')).toContain(
-      `If the prompt doesn't say what people sign up for (e.g. "make a signup for my kid's soccer team"), don't draft: ask, with the QUESTIONS reply.`,
+      `If the prompt doesn't say what people sign up for (e.g. "make a signup for my kid's soccer team") and carries no answers to your questions, don't draft: ask, with the QUESTIONS reply.`,
     );
   });
 

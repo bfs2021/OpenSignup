@@ -102,13 +102,13 @@ describe('system prompt', () => {
     expect(QuestionsSchema.parse(c.reply).questions.topics).toEqual(['what', 'when', 'how_many']);
   });
 
-  it('drafts placeholder games in Example D, which says what but not when', () => {
+  it('drafts placeholder performances in Example D, which says what but not when', () => {
     const d = examples.find((e) => e.name === 'D')!;
     const draft = FullDraftSchema.parse(d.reply);
-    expect(draft.slots.map((s) => s.values.game)).toEqual([
-      'TBD: game 1',
-      'TBD: game 2',
-      'TBD: game 3',
+    expect(draft.slots.map((s) => s.values.performance)).toEqual([
+      'TBD: performance 1',
+      'TBD: performance 2',
+      'TBD: performance 3',
     ]);
     expect(draft.slots.every((s) => s.capacity === 2)).toBe(true);
   });
