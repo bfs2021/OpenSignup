@@ -238,6 +238,14 @@ describe('POST /api/signups/magic-compose: questions and follow-ups (db)', () =>
     expect(await signupsMade()).toBe(1);
   });
 
+  it('drafts in one call when the draft carries a null questions key', async () => {
+    llm.replies = [ok({ ...DRAFT, questions: null })];
+    const res = await compose({ prompt: 'Bake sale', followUp: ANSWERS });
+    expect(res.status).toBe(200);
+    expect(llm.calls).toHaveLength(1);
+    expect(await signupsMade()).toBe(1);
+  });
+
   it('says it couldn’t draft when the retry asks again in another shape', async () => {
     llm.replies = [ok(QUESTIONS), ok({ questions: { topics: ['when'] } })];
     const res = await compose({ prompt: 'Bake sale', followUp: ANSWERS });
@@ -445,15 +453,42 @@ describe('POST /api/signups/magic-compose: what the activity log records (db)', 
     expect(rows[0]?.payload).toMatchObject(flags);
   });
 
-  it('records gaveUp, and no retry, when the retry was skipped', async () => {
+  it('records gaveUp, and no retry, when there was no time for the retry', async () => {
+    const start = Date.now();
+    let elapsed = 0;
+    vi.spyOn(Date, 'now').mockImplementation(() => start + elapsed);
+    llm.onCall = () => {
+      elapsed += getEnv().LLM_TIMEOUT_MS - 1_000;
+    };
+    try {
+      llm.replies = [ok(QUESTIONS)];
+      await compose({ prompt: 'Bake sale', followUp: ANSWERS });
+    } finally {
+      vi.restoreAllMocks();
+    }
+    const rows = await composeRows();
+    expect(rows.map((r) => r.payload)).toEqual([
+      expect.objectContaining({ retried: false, gaveUp: true }),
+    ]);
+  });
+
+  it('records no give-up for an organizer who had already left', async () => {
     llm.replies = [ok(QUESTIONS)];
     const controller = new AbortController();
     controller.abort();
     await compose({ prompt: 'Bake sale', followUp: ANSWERS }, { signal: controller.signal });
     const rows = await composeRows();
     expect(rows.map((r) => r.payload)).toEqual([
-      expect.objectContaining({ retried: false, gaveUp: true }),
+      expect.objectContaining({ retried: false, gaveUp: false }),
     ]);
+  });
+
+  it('records no magic_compose.asked when the organizer left before the questions came back', async () => {
+    llm.replies = [ok(QUESTIONS)];
+    const controller = new AbortController();
+    controller.abort();
+    await compose({ prompt: 'Bake sale' }, { signal: controller.signal });
+    expect(await composeRows()).toEqual([]);
   });
 
   it('records Draft with placeholders as every topic skipped', async () => {

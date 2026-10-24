@@ -17,7 +17,7 @@ import {
   neverInventRule,
 } from '@/lib/signup-rules';
 import { WHAT_OPTION_MAX_LENGTH, WHAT_OPTIONS_MAX, WHAT_OPTIONS_MIN } from './limits';
-import { QUESTION_TOPICS, type MagicComposeQuestions } from './questions';
+import { QUESTION_TOPICS, tidyText, type MagicComposeQuestions } from './questions';
 
 export type ChatMessage = {
   role: 'system' | 'user' | 'assistant';
@@ -84,7 +84,7 @@ export const QuestionsSchema = z
           .refine((t) => new Set(t).size === t.length, 'each topic at most once')
           .refine((t) => t.includes('what'), 'questions always ask what people sign up for'),
         whatOptions: z
-          .array(z.string().trim().min(1).max(WHAT_OPTION_MAX_LENGTH))
+          .array(z.string().transform(tidyText).pipe(z.string().min(1).max(WHAT_OPTION_MAX_LENGTH)))
           .min(WHAT_OPTIONS_MIN)
           .max(WHAT_OPTIONS_MAX)
           .refine(
@@ -97,19 +97,46 @@ export const QuestionsSchema = z
   .strict();
 
 /**
+ * The reply without its null top-level keys. Models in json_object mode often
+ * send null for a key they don't use (as `choices` and `groupBy` already
+ * allow), so a draft with `"questions": null` is a draft, and questions with
+ * `"refusalReason": null` are questions.
+ */
+function withoutNullKeys(value: unknown): unknown {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return value;
+  return Object.fromEntries(Object.entries(value).filter(([, v]) => v !== null));
+}
+
+/**
  * A refusal still wins, as it always has (`RefusalSchema` isn't strict). A
  * reply carrying `questions` is a questions reply and nothing else, so the
  * draft arm refuses that key; `FullDraftSchema` itself stays as it is, since
  * the MCP `create_signup` tool validates with it.
  */
-export const MagicComposeDraftSchema = z.union([
-  RefusalSchema,
-  QuestionsSchema,
-  FullDraftSchema.extend({ questions: z.undefined() }),
-]);
+export const MagicComposeDraftSchema = z.preprocess(
+  withoutNullKeys,
+  z.union([RefusalSchema, QuestionsSchema, FullDraftSchema.extend({ questions: z.undefined() })]),
+);
 
 export type MagicComposeDraft = z.infer<typeof FullDraftSchema>;
 export type MagicComposeParsed = z.infer<typeof MagicComposeDraftSchema>;
+
+/**
+ * Whether a raw reply asks questions, in any shape, read as
+ * `MagicComposeDraftSchema` reads it (null keys dropped, a refusal winning).
+ * After the answers, a model that asks again most likely asks about less than
+ * the first time (only "when", say, with no options), which `QuestionsSchema`
+ * would reject as malformed and the organizer would see as a broken draft.
+ */
+export function asksQuestions(value: unknown): boolean {
+  const reply = withoutNullKeys(value);
+  return (
+    typeof reply === 'object' &&
+    reply !== null &&
+    'questions' in reply &&
+    !('refusalReason' in reply)
+  );
+}
 
 /** A parsed reply that asks questions instead of drafting. */
 export function isQuestionsReply(p: MagicComposeParsed): p is { questions: MagicComposeQuestions } {

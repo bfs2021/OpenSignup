@@ -11,6 +11,7 @@ import { consumeRateLimit, RateLimits } from '@/lib/rate-limit';
 import { buildFollowUpMessages, FollowUpSchema } from '@/lib/magic-compose/follow-up';
 import { defaultLlmClient } from '@/lib/magic-compose/llm-client';
 import {
+  asksQuestions,
   buildMessages,
   isQuestionsReply,
   MagicComposeDraftSchema,
@@ -35,19 +36,6 @@ const PromptBodySchema = z.object({
  * budget, so a short LLM_TIMEOUT_MS still leaves room for a retry.
  */
 const RETRY_MIN_MS = 15_000;
-
-/**
- * Whether a reply asks questions, in any shape. After the answers, a model
- * that asks again most likely asks about less than the first time (only
- * "when", say, with no options), which `QuestionsSchema` would reject as
- * malformed and the organizer would see as a broken draft. A refusal beside
- * it still counts as a refusal, as `MagicComposeDraftSchema` reads it.
- */
-function asksQuestions(value: unknown): boolean {
-  return (
-    typeof value === 'object' && value !== null && 'questions' in value && !('refusalReason' in value)
-  );
-}
 
 /**
  * The model asked again after the answers, even after the firmer retry (or
@@ -143,7 +131,8 @@ export async function POST(req: NextRequest) {
     if (followUp && raw.ok && asksQuestions(raw.value)) {
       const left = deadline - Date.now();
       if (req.signal.aborted || left < Math.min(RETRY_MIN_MS, getEnv().LLM_TIMEOUT_MS / 2)) {
-        outcome.gaveUp = true;
+        // An organizer who has left isn't told anything, so it isn't a give-up.
+        outcome.gaveUp = !req.signal.aborted;
         log.warn(
           { promptLength: userPrompt.length, msLeft: left, aborted: req.signal.aborted },
           'magic-compose asked again after the answers, with no time to retry',
@@ -201,8 +190,9 @@ export async function POST(req: NextRequest) {
     }
 
     // Structured refusal: model returned only `refusalReason`. Surface the
-    // reason to the user without creating a signup, writing activity, or
-    // burning further work. Rate-limit stays consumed (the LLM call did happen).
+    // reason to the user without creating a signup or burning further work
+    // (a follow-up's magic_compose.answered row is still written, as for any
+    // ending). Rate-limit stays consumed (the LLM call did happen).
     if ('refusalReason' in draft.data) {
       log.info(
         { refusalReason: draft.data.refusalReason, promptLength: userPrompt.length },
@@ -230,7 +220,9 @@ export async function POST(req: NextRequest) {
         },
         'magic-compose asked questions',
       );
-      await recordAsked(db, actor, workspaceId, questions);
+      // Questions nobody saw would count as "asked, then left the questions
+      // screen", so a request the organizer has already left records none.
+      if (!req.signal.aborted) await recordAsked(db, actor, workspaceId, questions);
       return ok({ questions });
     }
 

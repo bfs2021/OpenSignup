@@ -77,7 +77,7 @@ reminders are timed from (`null` when none is left).
 
 | event | actor | payload | fired from |
 |---|---|---|---|
-| `magic_compose.asked` | organizer | `{ topics, options }`: the topics the model asked about (`what`, `when`, `how_many`; always `what`) and how many options it offered for "what" (2 to 4), never the options themselves | `POST /api/signups/magic-compose`, on a first call the model answered with questions instead of a draft |
+| `magic_compose.asked` | organizer | `{ topics, options }`: the topics the model asked about (`what`, `when`, `how_many`; always `what`) and how many options it offered for "what" (2 to 4), never the options themselves | `POST /api/signups/magic-compose`, on a first call the model answered with questions instead of a draft, unless the organizer had already left |
 | `magic_compose.answered` | organizer | `{ answered, skipped, picked, added, limits, placeholders, retried, gaveUp }`, described below | `POST /api/signups/magic-compose`, once a follow-up (a call carrying the organizer's answers) has ended, however it ended: a draft, a refusal, an error or `asked_again`. One row per follow-up the hourly quota was charged for |
 
 In `magic_compose.answered`:
@@ -99,7 +99,8 @@ In `magic_compose.answered`:
   one more call to the AI.
 - `gaveUp` is `true` when that retry asked too, or there was no time left for
   one (then `retried` is `false`), and the organizer was told the AI couldn't
-  draft from their answers.
+  draft from their answers. An organizer who had already left was told
+  nothing, so that's `false`.
 
 Both rows have `signup_id` set to `NULL` and `workspace_id` set to the
 organizer's default workspace. They describe no change, so each is written on
