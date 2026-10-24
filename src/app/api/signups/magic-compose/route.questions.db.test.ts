@@ -37,6 +37,8 @@ vi.mock('@/lib/env', async (importOriginal) => ({
 const llm = vi.hoisted(() => ({
   replies: [] as unknown[],
   calls: [] as Array<{ messages: ChatMessage[]; options?: { timeoutMs?: number } }>,
+  /** Called on each model call, for a test that moves the clock on. */
+  onCall: undefined as (() => void) | undefined,
 }));
 vi.mock('@/lib/magic-compose/llm-client', () => ({
   defaultLlmClient: () => ({
@@ -46,6 +48,7 @@ vi.mock('@/lib/magic-compose/llm-client', () => ({
       options?: { timeoutMs?: number },
     ) {
       llm.calls.push({ messages, ...(options ? { options } : {}) });
+      llm.onCall?.();
       return llm.replies.shift() ?? err({ code: 'upstream', message: 'no reply queued' });
     },
   }),
@@ -86,6 +89,7 @@ let workspaceId: string;
 beforeEach(async () => {
   llm.replies = [];
   llm.calls = [];
+  llm.onCall = undefined;
   const db = getDb();
   organizerId = makeId('org');
   workspaceId = makeId('ws');
@@ -206,6 +210,35 @@ describe('POST /api/signups/magic-compose: questions and follow-ups (db)', () =>
     expect(await signupsMade()).toBe(0);
   });
 
+  it.each([
+    ['about less than the first time', { questions: { topics: ['when'], whatOptions: [] } }],
+    ['beside half a draft', { ...DRAFT, questions: QUESTIONS.questions }],
+  ])('retries when the answers get questions back %s', async (_name, again) => {
+    llm.replies = [ok(again), ok(DRAFT)];
+    const res = await compose({ prompt: 'Bake sale', followUp: ANSWERS });
+    expect(res.status).toBe(200);
+    expect(llm.calls).toHaveLength(2);
+    expect(await signupsMade()).toBe(1);
+  });
+
+  it('says it couldn’t draft when the retry asks again in another shape', async () => {
+    llm.replies = [ok(QUESTIONS), ok({ questions: { topics: ['when'] } })];
+    const res = await compose({ prompt: 'Bake sale', followUp: ANSWERS });
+    const body = (await res.json()) as { error: { details: unknown } };
+    expect(body.error.details).toEqual({ reason: 'asked_again' });
+    expect(llm.calls).toHaveLength(2);
+  });
+
+  it('reports a retry that runs out of time as a timeout', async () => {
+    llm.replies = [ok(QUESTIONS), err({ code: 'timeout', message: 'LLM request timed out' })];
+    const res = await compose({ prompt: 'Bake sale', followUp: ANSWERS });
+    expect(res.status).toBe(500);
+    const body = (await res.json()) as { error: { message: string } };
+    expect(body.error.message).toBe('AI drafting timed out. Try a simpler prompt.');
+    expect(llm.calls).toHaveLength(2);
+    expect(await quotaUsed()).toBe(1);
+  });
+
   it('after Draft with placeholders, says to try again or fill it in by hand', async () => {
     llm.replies = [ok(QUESTIONS), ok(QUESTIONS)];
     const res = await compose({ prompt: 'Bake sale', followUp: PLACEHOLDERS });
@@ -247,19 +280,23 @@ describe('POST /api/signups/magic-compose: questions and follow-ups (db)', () =>
     expect(llm.calls).toHaveLength(1);
   });
 
-  describe('with less than 15 seconds of the budget left after the first call', () => {
-    const original = process.env.LLM_TIMEOUT_MS;
+  describe('when the first call used most of the budget', () => {
+    // The clock moves on by `took` during the first model call.
+    let took = 0;
     beforeEach(() => {
-      process.env.LLM_TIMEOUT_MS = '10000';
-      resetEnvCache();
+      const start = Date.now();
+      let elapsed = 0;
+      vi.spyOn(Date, 'now').mockImplementation(() => start + elapsed);
+      llm.onCall = () => {
+        if (llm.calls.length === 1) elapsed += took;
+      };
     });
     afterEach(() => {
-      if (original === undefined) delete process.env.LLM_TIMEOUT_MS;
-      else process.env.LLM_TIMEOUT_MS = original;
-      resetEnvCache();
+      vi.restoreAllMocks();
     });
 
-    it('skips the retry and says it couldn’t draft', async () => {
+    it('skips the retry with under 15 seconds left, and says it couldn’t draft', async () => {
+      took = getEnv().LLM_TIMEOUT_MS - 14_000;
       llm.replies = [ok(QUESTIONS), ok(DRAFT)];
       const res = await compose({ prompt: 'Bake sale', followUp: ANSWERS });
       expect(res.status).toBe(400);
@@ -267,6 +304,44 @@ describe('POST /api/signups/magic-compose: questions and follow-ups (db)', () =>
       expect(body.error.details).toEqual({ reason: 'asked_again' });
       expect(llm.calls).toHaveLength(1);
       expect(await signupsMade()).toBe(0);
+    });
+
+    it('still retries with 16 seconds left', async () => {
+      took = getEnv().LLM_TIMEOUT_MS - 16_000;
+      llm.replies = [ok(QUESTIONS), ok(DRAFT)];
+      const res = await compose({ prompt: 'Bake sale', followUp: ANSWERS });
+      expect(res.status).toBe(200);
+      expect(llm.calls[1]?.options?.timeoutMs).toBe(16_000);
+    });
+
+    describe('with a short LLM_TIMEOUT_MS', () => {
+      const original = process.env.LLM_TIMEOUT_MS;
+      beforeEach(() => {
+        process.env.LLM_TIMEOUT_MS = '10000';
+        resetEnvCache();
+      });
+      afterEach(() => {
+        if (original === undefined) delete process.env.LLM_TIMEOUT_MS;
+        else process.env.LLM_TIMEOUT_MS = original;
+        resetEnvCache();
+      });
+
+      it('retries with half the budget left, rather than never', async () => {
+        took = 4_000;
+        llm.replies = [ok(QUESTIONS), ok(DRAFT)];
+        const res = await compose({ prompt: 'Bake sale', followUp: ANSWERS });
+        expect(res.status).toBe(200);
+        expect(llm.calls[1]?.options?.timeoutMs).toBe(6_000);
+      });
+
+      it('skips it with less than half left', async () => {
+        took = 6_000;
+        llm.replies = [ok(QUESTIONS), ok(DRAFT)];
+        const res = await compose({ prompt: 'Bake sale', followUp: ANSWERS });
+        const body = (await res.json()) as { error: { details: unknown } };
+        expect(body.error.details).toEqual({ reason: 'asked_again' });
+        expect(llm.calls).toHaveLength(1);
+      });
     });
   });
 
