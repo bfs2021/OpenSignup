@@ -125,8 +125,10 @@ export function Drafting({
     };
   }, [draft, onAnimationDone]);
 
-  const reached = (id: string) => DRAFT_STEPS.findIndex((s) => s.id === id) <= stepIdx;
-  const passed = (id: string) => DRAFT_STEPS.findIndex((s) => s.id === id) < stepIdx;
+  const reached = (id: string) =>
+    DRAFT_STEPS.findIndex((s) => s.id === id) <= stepIdx;
+  const passed = (id: string) =>
+    DRAFT_STEPS.findIndex((s) => s.id === id) < stepIdx;
 
   const titleText = useTypewriter(
     draft?.title ?? '',
@@ -178,14 +180,14 @@ export function Drafting({
           <h1 className="text-2xl font-semibold tracking-tight">
             {reading ? 'Reading your description' : 'Drafting your signup'}
           </h1>
-          <p className="mt-1.5 text-sm leading-relaxed text-ink-muted">
+          <p className="text-ink-muted mt-1.5 text-sm leading-relaxed">
             {reading
               ? "You'll get a draft, or a few quick questions if it needs more to go on."
               : "You'll be able to edit anything once it's ready."}
           </p>
         </div>
 
-        <ul className="flex flex-col gap-0.5 rounded-2xl border border-surface-sunk bg-white p-1.5">
+        <ul className="border-surface-sunk flex flex-col gap-0.5 rounded-2xl border bg-white p-1.5">
           {DRAFT_STEPS.map((s, i) => {
             const done = i < stepIdx;
             const active = i === stepIdx;
@@ -199,7 +201,11 @@ export function Drafting({
                 <StepIcon done={done} active={active} />
                 <div
                   className={`text-sm ${
-                    done ? 'text-ink-muted' : active ? 'font-medium text-ink' : 'text-ink-soft'
+                    done
+                      ? 'text-ink-muted'
+                      : active
+                        ? 'text-ink font-medium'
+                        : 'text-ink-soft'
                   }`}
                 >
                   {s.label}
@@ -212,16 +218,16 @@ export function Drafting({
         <button
           type="button"
           onClick={onCancel}
-          className="min-h-11 self-start rounded-xl px-3 text-sm font-medium text-ink-muted hover:text-ink"
+          className="text-ink-muted hover:text-ink min-h-11 self-start rounded-xl px-3 text-sm font-medium"
         >
           Cancel
         </button>
       </aside>
 
-      <section className="overflow-hidden rounded-2xl border border-surface-sunk bg-white">
-        <div className="flex items-center justify-between border-b border-surface-sunk bg-surface-raised px-4 py-3 text-xs font-medium text-ink-muted">
+      <section className="border-surface-sunk overflow-hidden rounded-2xl border bg-white">
+        <div className="border-surface-sunk bg-surface-raised text-ink-muted flex items-center justify-between border-b px-4 py-3 text-xs font-medium">
           <span className="flex items-center gap-2">
-            <span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-warn" />
+            <span className="bg-warn inline-block h-1.5 w-1.5 animate-pulse rounded-full" />
             {reading ? 'Reading' : 'Drafting'} · live
           </span>
         </div>
@@ -248,7 +254,7 @@ export function Drafting({
 
           <DraftField label="Description">
             {descShown && descText ? (
-              <p className="text-[15px] leading-relaxed text-ink">
+              <p className="text-ink text-[15px] leading-relaxed">
                 {descText}
                 {!descDone && <Caret />}
               </p>
@@ -273,7 +279,7 @@ export function Drafting({
                     i < fieldsRevealed ? (
                       <span
                         key={f.ref}
-                        className="inline-flex items-center gap-1.5 rounded-full border border-brand/20 bg-brand/10 px-3 py-1.5 text-[13px] font-medium text-brand"
+                        className="bg-brand/10 text-brand border-brand/20 inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-[13px] font-medium"
                       >
                         {f.label}
                       </span>
@@ -282,7 +288,7 @@ export function Drafting({
                     ),
                   )}
               {fieldsRevealed === visibleFields.length && overflowFields > 0 && (
-                <span className="inline-flex items-center px-3 py-1.5 text-[13px] text-ink-muted">
+                <span className="text-ink-muted inline-flex items-center px-3 py-1.5 text-[13px]">
                   +{overflowFields} more
                 </span>
               )}
@@ -293,12 +299,12 @@ export function Drafting({
             label="Slots"
             meta={slotsCount > 0 ? `${slotsCount} of ${slots.length}` : undefined}
           >
-            <ul className="overflow-hidden rounded-xl border border-surface-sunk bg-surface-raised">
+            <ul className="border-surface-sunk bg-surface-raised overflow-hidden rounded-xl border">
               {visibleSlots.length === 0
                 ? Array.from({ length: 4 }).map((_, i) => (
                     <li
                       key={i}
-                      className="grid min-h-[44px] items-center gap-3 border-b border-surface-sunk px-3.5 py-2.5 last:border-b-0"
+                      className="border-surface-sunk grid min-h-[44px] items-center gap-3 border-b px-3.5 py-2.5 last:border-b-0"
                       style={{ gridTemplateColumns: '38px 1fr 50px' }}
                     >
                       <Skeleton width={16} height={10} />
@@ -311,12 +317,12 @@ export function Drafting({
                     return (
                       <li
                         key={i}
-                        className={`grid min-h-[44px] items-center gap-3 border-b border-surface-sunk px-3.5 py-2.5 last:border-b-0 ${
+                        className={`border-surface-sunk grid min-h-[44px] items-center gap-3 border-b px-3.5 py-2.5 last:border-b-0 ${
                           shown ? 'bg-white' : ''
                         }`}
                         style={{ gridTemplateColumns }}
                       >
-                        <span className="font-mono text-xs text-ink-soft">{i + 1}</span>
+                        <span className="text-ink-soft font-mono text-xs">{i + 1}</span>
                         {shown ? (
                           <>
                             {visibleFields.map((f) => (
@@ -324,7 +330,7 @@ export function Drafting({
                                 {formatPreviewValue(s.values[f.ref])}
                               </span>
                             ))}
-                            <span className="justify-self-end font-mono text-xs text-ink-muted">
+                            <span className="text-ink-muted justify-self-end font-mono text-xs">
                               0/{s.capacity ?? '∞'}
                             </span>
                           </>
@@ -340,7 +346,7 @@ export function Drafting({
                     );
                   })}
               {slotsCount === visibleSlots.length && overflowSlots > 0 && (
-                <li className="px-3.5 py-2 text-center text-[13px] text-ink-muted">
+                <li className="text-ink-muted px-3.5 py-2 text-center text-[13px]">
                   +{overflowSlots} more
                 </li>
               )}
@@ -364,10 +370,10 @@ function DraftField({
   return (
     <div>
       <div className="mb-2 flex items-baseline justify-between">
-        <div className="text-[11.5px] font-medium uppercase tracking-wide text-ink-soft">
+        <div className="text-ink-soft text-[11.5px] font-medium uppercase tracking-wide">
           {label}
         </div>
-        {meta && <div className="font-mono text-xs text-ink-muted">{meta}</div>}
+        {meta && <div className="text-ink-muted font-mono text-xs">{meta}</div>}
       </div>
       {children}
     </div>
@@ -401,7 +407,7 @@ function Caret() {
   return (
     <span
       aria-hidden="true"
-      className="ml-0.5 inline-block h-[1em] w-[2px] animate-pulse bg-brand align-text-bottom"
+      className="bg-brand ml-0.5 inline-block h-[1em] w-[2px] animate-pulse align-text-bottom"
     />
   );
 }
@@ -409,7 +415,7 @@ function Caret() {
 function StepIcon({ done, active }: { done: boolean; active: boolean }) {
   if (done) {
     return (
-      <span className="inline-flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-full bg-success text-white">
+      <span className="bg-success inline-flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-full text-white">
         <Check className="h-3 w-3" strokeWidth={3} aria-hidden="true" />
       </span>
     );
@@ -417,18 +423,18 @@ function StepIcon({ done, active }: { done: boolean; active: boolean }) {
   if (active) {
     return (
       <span className="relative h-5 w-5 flex-shrink-0">
-        <span className="absolute inset-0 animate-spin rounded-full border-2 border-surface-sunk border-t-brand" />
+        <span className="border-surface-sunk border-t-brand absolute inset-0 animate-spin rounded-full border-2" />
       </span>
     );
   }
   return (
-    <span className="inline-block h-5 w-5 flex-shrink-0 rounded-full border-[1.5px] border-surface-sunk bg-white" />
+    <span className="border-surface-sunk inline-block h-5 w-5 flex-shrink-0 rounded-full border-[1.5px] bg-white" />
   );
 }
 
 function PulseMark() {
   return (
-    <div className="relative flex h-14 w-14 items-center justify-center rounded-2xl bg-brand/10 text-brand">
+    <div className="bg-brand/10 text-brand relative flex h-14 w-14 items-center justify-center rounded-2xl">
       <Sparkles className="h-6 w-6" aria-hidden="true" />
       <span className="absolute inset-0 animate-ping rounded-2xl border-2 border-brand opacity-50" />
     </div>
