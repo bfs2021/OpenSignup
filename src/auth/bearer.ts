@@ -10,7 +10,7 @@ import { createLocalJWKSet, errors as joseErrors, jwtVerify, type JSONWebKeySet 
 import { getDb } from '@/db/client';
 import { log } from '@/lib/log';
 import type { Actor, WorkspaceRole } from '@/lib/policy';
-import { mcpResourceUrl, oauthIssuer } from '@/oauth/config';
+import { SIGNING_KEY_CACHE_MAX_AGE, mcpResourceUrl, oauthIssuer } from '@/oauth/config';
 import { getSigningKeys, resetSigningKeysCache } from '@/oauth/instance';
 import { protectedResourceMetadataUrl } from '@/oauth/resource-metadata';
 import { parseScopeString, type Scope } from '@/oauth/scopes';
@@ -106,18 +106,6 @@ export async function resolveBearerActor(
   };
 }
 
-/**
- * A 403 `insufficient_scope` challenge naming the missing scope, for the
- * step-up path: a client holding `signups:*` that reaches for participant
- * data gets told exactly which scope to ask for.
- */
-export function insufficientScopeResponse(required: Scope[]): Response {
-  return bearerAuthChallengeResponse(
-    new OAuthError(OAuthErrorCode.InsufficientScope, 'this action needs an additional permission'),
-    { requiredScopes: required, resourceMetadataUrl: protectedResourceMetadataUrl(mcpResourceUrl()) },
-  );
-}
-
 let verifier: OAuthTokenVerifier | null = null;
 const RELOAD_INTERVAL_MS = 30_000;
 
@@ -131,7 +119,10 @@ function getVerifier(): OAuthTokenVerifier {
  * HTTP round trip to our own JWKS endpoint. Issuer and audience are
  * non-negotiable: a token minted for any other resource is rejected. On an
  * unknown `kid` the key set is re-read once, which is how a key rotated by
- * another instance becomes visible here.
+ * another instance becomes visible here. It is also re-read once it is
+ * `SIGNING_KEY_CACHE_MAX_AGE` old, which is how a retired key stops being
+ * trusted: a token signed with it carries a `kid` we already know, so the
+ * unknown-`kid` path alone would trust it until a restart.
  */
 export function createVerifier(opts: {
   issuer: string;
@@ -143,7 +134,15 @@ export function createVerifier(opts: {
     opts.loadKeys ?? (async () => ({ keys: (await getSigningKeys()).publicKeys }));
   const reload = opts.reload ?? resetSigningKeysCache;
   let keySet: ReturnType<typeof createLocalJWKSet> | null = null;
+  let staleAt = 0;
   let lastReloadAt = 0;
+
+  async function readKeys(): Promise<ReturnType<typeof createLocalJWKSet>> {
+    reload();
+    const fresh = createLocalJWKSet(await loadKeys());
+    staleAt = Date.now() + SIGNING_KEY_CACHE_MAX_AGE * 1000;
+    return fresh;
+  }
 
   /**
    * A forged token with a random `kid` must not be able to flush the key
@@ -151,12 +150,25 @@ export function createVerifier(opts: {
    * genuinely rotated key still shows up within that interval.
    */
   async function keys(force = false) {
-    if (force && Date.now() - lastReloadAt >= RELOAD_INTERVAL_MS) {
-      lastReloadAt = Date.now();
-      reload();
-      keySet = null;
+    const now = Date.now();
+    if (!keySet) {
+      keySet = createLocalJWKSet(await loadKeys());
+      staleAt = Date.now() + SIGNING_KEY_CACHE_MAX_AGE * 1000;
+    } else if (force && now - lastReloadAt >= RELOAD_INTERVAL_MS) {
+      lastReloadAt = now;
+      keySet = await readKeys();
+    } else if (now >= staleAt) {
+      // Push the next try out first, so requests arriving during the read
+      // don't each start one. A failed read keeps the keys we hold: they
+      // still verify every token they did a moment ago, and a slow database
+      // shouldn't turn those into errors. Try again after the reload interval.
+      staleAt = now + RELOAD_INTERVAL_MS;
+      try {
+        keySet = await readKeys();
+      } catch (err) {
+        log.warn({ err }, 'oauth: signing keys re-read failed; keeping the cached set');
+      }
     }
-    if (!keySet) keySet = createLocalJWKSet(await loadKeys());
     return keySet;
   }
 

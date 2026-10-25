@@ -106,16 +106,73 @@ describe('createVerifier infrastructure failures', () => {
     const token = await mint(signer, 'k1', { iss: ISSUER, aud: RESOURCE, sub: 'org_1', client_id: 'c' });
     await expect(v.verifyAccessToken(token)).rejects.toMatchObject({ code: 'server_error' });
   });
+
+  it('keeps verifying with the cached keys when a timed re-read fails', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      const { createVerifier } = await import('./bearer');
+      const { SIGNING_KEY_CACHE_MAX_AGE } = await import('@/oauth/config');
+      let down = false;
+      const loadKeys = vi.fn(async () => {
+        if (down) throw new Error('db slow');
+        return { keys: [publicJwk] };
+      });
+      const v = createVerifier({ issuer: ISSUER, resource: RESOURCE, loadKeys, reload() {} });
+      const token = await mint(signer, 'k1', {
+        iss: ISSUER,
+        aud: RESOURCE,
+        sub: 'org_1',
+        client_id: 'c',
+      });
+      await v.verifyAccessToken(token);
+      down = true;
+      vi.setSystemTime(Date.now() + SIGNING_KEY_CACHE_MAX_AGE * 1000);
+      await expect(v.verifyAccessToken(token)).resolves.toMatchObject({ clientId: 'c' });
+      expect(loadKeys).toHaveBeenCalledTimes(2);
+      // The failed read isn't retried on every request.
+      await expect(v.verifyAccessToken(token)).resolves.toMatchObject({ clientId: 'c' });
+      expect(loadKeys).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
-describe('insufficientScopeResponse', () => {
-  it('is a 403 challenge naming the scope and the resource metadata', async () => {
-    const { insufficientScopeResponse } = await import('./bearer');
-    const r = insufficientScopeResponse(['commitments:read']);
-    expect(r.status).toBe(403);
-    const challenge = r.headers.get('www-authenticate') ?? '';
-    expect(challenge).toContain('error="insufficient_scope"');
-    expect(challenge).toContain('scope="commitments:read"');
-    expect(challenge).toContain('resource_metadata="https://signup.example.org/.well-known/oauth-protected-resource/api/mcp"');
+describe('createVerifier timed re-read', () => {
+  it('stops accepting a retired key once its copy of the keys is stale, with no restart', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      const { createVerifier } = await import('./bearer');
+      const { SIGNING_KEY_CACHE_MAX_AGE } = await import('@/oauth/config');
+      let keys = [rotatedJwk, publicJwk];
+      const reload = vi.fn();
+      const loadKeys = vi.fn(async () => ({ keys }));
+      const v = createVerifier({ issuer: ISSUER, resource: RESOURCE, loadKeys, reload });
+      const old = await mint(
+        signer,
+        'k1',
+        { iss: ISSUER, aud: RESOURCE, sub: 'org_1', client_id: 'c' },
+        { exp: '1h' },
+      );
+      await expect(v.verifyAccessToken(old)).resolves.toMatchObject({ clientId: 'c' });
+
+      keys = [rotatedJwk]; // k1 retired in the table
+      vi.setSystemTime(Date.now() + SIGNING_KEY_CACHE_MAX_AGE * 1000 - 1000);
+      await expect(v.verifyAccessToken(old)).resolves.toMatchObject({ clientId: 'c' });
+      expect(loadKeys).toHaveBeenCalledTimes(1);
+
+      vi.setSystemTime(Date.now() + 1000);
+      await expect(v.verifyAccessToken(old)).rejects.toMatchObject({ code: 'invalid_token' });
+      expect(reload).toHaveBeenCalled();
+      const fresh = await mint(rotatedSigner, 'k2', {
+        iss: ISSUER,
+        aud: RESOURCE,
+        sub: 'org_1',
+        client_id: 'c',
+      });
+      await expect(v.verifyAccessToken(fresh)).resolves.toMatchObject({ clientId: 'c' });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

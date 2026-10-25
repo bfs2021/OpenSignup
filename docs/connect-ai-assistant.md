@@ -160,6 +160,25 @@ derives everything from `AUTH_URL`:
 - Signing keys generate themselves on first use and live in the database, so
   every instance behind a load balancer verifies the others' tokens and a
   redeploy does not disconnect anyone.
+- To rotate the signing key (say, because a database backup that holds it
+  leaked):
+  1. Run `pnpm oauth:keys rotate` (in the Docker setup,
+     `docker compose exec web pnpm oauth:keys rotate`). It adds a key and
+     lists the active ones, newest first, with each one's id.
+  2. Restart every web instance. An instance signs with the newest key that
+     existed when it started, so until it restarts it keeps signing with the
+     old one.
+  3. Wait 15 minutes (the access-token lifetime), so every token the old key
+     signed has expired.
+  4. Run `pnpm oauth:keys retire <kid>` with the old key's id. It refuses
+     while no newer key has been signing for 15 minutes, which catches a
+     forgotten restart, though it can only see that one instance restarted,
+     not that every one did. Every instance stops trusting the retired key
+     within 5 minutes, when it next re-reads the keys, with no restart.
+
+  Nobody is disconnected: assistants refresh their tokens on their own. The
+  provider's own JWKS endpoint keeps listing the retired public key until the
+  instance restarts; nothing here reads it to verify tokens.
 
 Discovery is served at `/.well-known/oauth-authorization-server` (and the
 identical `/.well-known/openid-configuration`) plus

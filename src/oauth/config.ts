@@ -88,6 +88,13 @@ export const OAUTH_TTL = {
   SESSION: 24 * 60 * 60,
 } as const;
 
+/**
+ * How long, in seconds, an instance trusts its in-memory copy of the signing
+ * keys before reading the table again. This is what makes
+ * `pnpm oauth:keys retire` take effect without a restart.
+ */
+export const SIGNING_KEY_CACHE_MAX_AGE = 5 * 60;
+
 export const SIGNING_ALG = 'ES256';
 
 export const RESOURCE_SCOPE_STRING = RESOURCE_SCOPES.join(' ');

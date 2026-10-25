@@ -9,7 +9,7 @@ import { RateLimits, chargeRateLimit } from '@/lib/rate-limit';
 import { DrizzleOidcAdapter } from './adapter';
 import { mcpResourceUrl, oauthIssuer } from './config';
 import { findGrantIdFor, touchGrantUsed } from './grants';
-import { loadOrCreateSigningKeys, type SigningKeySet } from './keys';
+import { loadOrCreateSigningKeys, markSigningKeyInUse, type SigningKeySet } from './keys';
 import { buildProvider } from './provider';
 import { parseStaticClients } from './static-clients';
 
@@ -76,6 +76,14 @@ async function build(): Promise<Provider> {
   const env = getEnv();
   const db = getDb();
   const keys = await getSigningKeys();
+  const signingKid = keys.privateKeys[0]?.kid;
+  // Best effort: an unstamped key only makes `oauth:keys retire` refuse the
+  // key before it, which is the safe way round.
+  if (signingKid) {
+    await markSigningKeyInUse(db, signingKid).catch((err: unknown) =>
+      log.warn({ err, kid: signingKid }, 'oauth: could not record the signing key in use'),
+    );
+  }
   const provider = buildProvider({
     issuer: oauthIssuer(),
     resource: mcpResourceUrl(),
