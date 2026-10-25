@@ -18,6 +18,7 @@ import {
   isQuestionsReply,
   MagicComposeDraftSchema,
 } from '@/lib/magic-compose/prompt';
+import { fitDraftText } from '@/lib/magic-compose/fit-text';
 import { persistDraft } from '@/lib/magic-compose/persist';
 import type { FollowUp } from '@/lib/magic-compose/questions';
 import { mapMagicComposeError } from './errors';
@@ -211,7 +212,11 @@ export async function POST(req: NextRequest) {
       return fail(serviceError(mapped.code, mapped.message, { details }));
     }
 
-    const draft = MagicComposeDraftSchema.safeParse(raw.value);
+    // A title or description over its limit is cut down rather than failing
+    // the whole draft: a model asked to keep a long announcement word for word
+    // goes over the same way on every retry.
+    const fitted = fitDraftText(raw.value);
+    const draft = MagicComposeDraftSchema.safeParse(fitted.value);
     if (!draft.success) {
       log.warn({ issues: draft.error.issues.slice(0, 5), raw: raw.value }, 'magic-compose draft failed Zod');
       await recordFailed(db, actor, session.defaultWorkspaceId, 'schema_mismatch');
@@ -301,7 +306,7 @@ export async function POST(req: NextRequest) {
           promptLength: userPrompt.length,
           groupByFieldRefs,
         },
-        warnings,
+        warnings: [...fitted.warnings, ...warnings],
         draft: buildDraftPreview(draft.data, template),
       },
       {
