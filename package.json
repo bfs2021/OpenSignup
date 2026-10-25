@@ -50,7 +50,7 @@
     "drizzle-orm": "^0.45.2",
     "jose": "6.2.12",
     "lucide-react": "^0.468.0",
-    "next": "15.5.27",
+    "next": "15.5.28",
     "next-auth": "5.0.0-beta.32",
     "nodemailer": "^10.0.9",
     "oidc-provider": "9.12.2",
@@ -66,7 +66,7 @@
   },
   "pnpm": {
     "overrides": {
-      "next": "15.5.27",
+      "next": "15.5.28",
       "shell-quote": "1.11.0"
     },
     "peerDependencyRules": {
@@ -92,7 +92,7 @@
     "autoprefixer": "^10.4.20",
     "drizzle-kit": "^0.30.1",
     "eslint": "^9.17.0",
-    "eslint-config-next": "15.5.27",
+    "eslint-config-next": "15.5.28",
     "jsdom": "^25.0.1",
     "knip": "^6.39.0",
     "pino-pretty": "^13.0.0",
