@@ -77,25 +77,42 @@ describe('createVerifier', () => {
 
   it('reloads the key set once when it meets an unknown kid, so a rotated key is picked up', async () => {
     const { createVerifier } = await import('./bearer');
-    let keys = [publicJwk];
-    const reload = vi.fn(() => {
-      keys = [rotatedJwk, publicJwk];
-    });
-    const loadKeys = vi.fn(async () => ({ keys }));
+    let table = [publicJwk];
+    const reload = vi.fn();
+    const loadKeys = vi.fn(async () => ({ keys: table }));
     const v = createVerifier({ issuer: ISSUER, resource: RESOURCE, loadKeys, reload });
     const old = await mint(signer, 'k1', { iss: ISSUER, aud: RESOURCE, sub: 'org_1', client_id: 'c' });
     await v.verifyAccessToken(old);
+    // The first load reloads too, so it never starts from a stale shared cache.
+    expect(reload).toHaveBeenCalledTimes(1);
+    expect(loadKeys).toHaveBeenCalledTimes(1);
+    table = [rotatedJwk, publicJwk]; // another instance rotated
     const fresh = await mint(rotatedSigner, 'k2', { iss: ISSUER, aud: RESOURCE, sub: 'org_1', client_id: 'c' });
     await expect(v.verifyAccessToken(fresh)).resolves.toMatchObject({ clientId: 'c' });
-    expect(reload).toHaveBeenCalledTimes(1);
+    expect(reload).toHaveBeenCalledTimes(2);
     expect(loadKeys).toHaveBeenCalledTimes(2);
     // A genuinely unknown kid does not loop, and within the reload interval a
     // second unknown kid cannot flush the cache again (a forged token must not
     // be able to force a key-store read per request).
     const bogus = await mint((await generateKeyPair('ES256')).privateKey, 'k3', { iss: ISSUER, aud: RESOURCE, sub: 'org_1', client_id: 'c' });
     await expect(v.verifyAccessToken(bogus)).rejects.toMatchObject({ code: 'invalid_token' });
-    expect(reload).toHaveBeenCalledTimes(1);
+    expect(reload).toHaveBeenCalledTimes(2);
     expect(loadKeys).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not start from a shared key cache filled before a key was retired', async () => {
+    const { createVerifier } = await import('./bearer');
+    // The cache still holds k1 from when the provider was built; the table no
+    // longer does, and only a reload clears the cache.
+    let cached: Record<string, unknown>[] | null = [rotatedJwk, publicJwk];
+    const table = [rotatedJwk];
+    const reload = () => {
+      cached = null;
+    };
+    const loadKeys = async () => ({ keys: cached ?? table });
+    const v = createVerifier({ issuer: ISSUER, resource: RESOURCE, loadKeys, reload });
+    const retired = await mint(signer, 'k1', { iss: ISSUER, aud: RESOURCE, sub: 'org_1', client_id: 'c' });
+    await expect(v.verifyAccessToken(retired)).rejects.toMatchObject({ code: 'invalid_token' });
   });
 });
 

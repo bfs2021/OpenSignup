@@ -152,8 +152,10 @@ export function createVerifier(opts: {
   async function keys(force = false) {
     const now = Date.now();
     if (!keySet) {
-      keySet = createLocalJWKSet(await loadKeys());
-      staleAt = Date.now() + SIGNING_KEY_CACHE_MAX_AGE * 1000;
+      // Through readKeys, not loadKeys alone: the process-wide cache may have
+      // been filled when the provider was built, before a key was retired,
+      // and starting from it would trust that key for another max age.
+      keySet = await readKeys();
     } else if (force && now - lastReloadAt >= RELOAD_INTERVAL_MS) {
       lastReloadAt = now;
       keySet = await readKeys();
