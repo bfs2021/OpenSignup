@@ -261,7 +261,7 @@ test.describe('organizer flow', () => {
       );
 
     await page.goto(`/app/signups/${signupId}/build`);
-    await page.getByRole('button', { name: /Edit slot .*Juice/ }).click();
+    await page.getByRole('button', { name: /^Edit slot .*Juice.*taken$/ }).click();
     const date = page.getByLabel('Date value');
     // The picker starts where the services do.
     await expect(date).toHaveAttribute('min', '1900-01-01');
@@ -542,7 +542,7 @@ for (const [device, viewport] of [
         .getByRole('button', { name: 'Done' })
         .click();
       await expect(
-        page.getByRole('button', { name: 'Edit slot — Cashier TBD, people can see “TBD”' }),
+        page.getByRole('button', { name: /^Edit slot — Cashier TBD, people can see “TBD”, / }),
       ).toBeVisible();
       await expect(page.getByText('People can see “TBD”', { exact: true })).toBeVisible();
       await expect(ready(page)).toHaveCount(0);
@@ -560,7 +560,7 @@ for (const [device, viewport] of [
       const mark = slot.getByText('Still says “TBD”', { exact: true });
       await expect(mark).toBeVisible();
       await expect(
-        slot.getByRole('button', { name: 'Edit slot — Cashier TBD, still says “TBD”' }),
+        slot.getByRole('button', { name: /^Edit slot — Cashier TBD, still says “TBD”, / }),
       ).toBeVisible();
 
       const publish = publishButton(page);
@@ -585,7 +585,7 @@ for (const [device, viewport] of [
       await expect(publish).toHaveCSS('outline-offset', '3px');
       await expect(ready(page)).toHaveCount(1);
       await expect(mark).toHaveCount(0);
-      await expect(slot.getByRole('button', { name: 'Edit slot — Cashier' })).toBeVisible();
+      await expect(slot.getByRole('button', { name: /^Edit slot — Cashier, / })).toBeVisible();
       await expect(publish).not.toHaveCSS('outline-offset', '3px');
       await expect(publish).toBeFocused();
 
@@ -603,7 +603,7 @@ for (const [device, viewport] of [
         values: { what: 'Cashier TBD', date: '2030-04-06' },
       });
       await page.goto(`/app/signups/${draft.id}/build`);
-      await page.getByRole('button', { name: /^Edit slot — Cashier TBD/ }).click();
+      await page.getByRole('button', { name: /^Edit slot — Cashier TBD, / }).click();
       const editor = page.getByTestId(`slot-editor-${draft.slotId}`);
       // Enter does nothing new in a slot opened by hand.
       await editor.getByRole('textbox', { name: 'What value' }).press('Enter');
@@ -633,7 +633,7 @@ test.describe('the TBD mark on a phone', () => {
     });
     await page.goto(`/app/signups/${signup.id}/build`);
     const row = page.getByRole('button', {
-      name: 'Edit slot — Bake stall: TBD, people can see “TBD”',
+      name: /^Edit slot — Bake stall: TBD, people can see “TBD”, /,
     });
     const tag = row.getByText('People can see “TBD”', { exact: true });
     const anchor = row.getByText('Bake stall: TBD', { exact: true });
@@ -670,7 +670,7 @@ test.describe('the TBD mark on a computer', () => {
       },
     });
     await page.goto(`/app/signups/${signup.id}/build`);
-    const row = page.getByRole('button', { name: /people can see “TBD”$/ });
+    const row = page.getByRole('button', { name: /people can see “TBD”, 0 of 3 taken$/ });
     const tag = row.getByText('People can see “TBD”', { exact: true });
     const anchor = row.getByText(/^Cashier for the whole/);
     const summary = row.getByText(/^Sat, Apr 6/);
@@ -697,7 +697,7 @@ test.describe('the TBD mark on a computer', () => {
       slot: { values: { what: 'Juice TBD', date: '2030-04-06' }, capacity: 3 },
     });
     await page.goto(`/app/signups/${signup.id}/build`);
-    const row = page.getByRole('button', { name: 'Edit slot — Juice TBD, people can see “TBD”' });
+    const row = page.getByRole('button', { name: /^Edit slot — Juice TBD, people can see “TBD”, / });
     const tag = row.getByText('People can see “TBD”', { exact: true });
     const summary = row.getByText(/^Sat, Apr 6/);
     const count = row.getByText('0 of 3 taken', { exact: true });
@@ -772,7 +772,7 @@ test.describe('Publish’s check, around the Build tab', () => {
       values: { what: 'Juice', date: '2030-04-06' },
     });
     await page.goto(`/app/signups/${draft.id}/build`);
-    await page.getByRole('button', { name: /^Edit slot .*Juice/ }).click();
+    await page.getByRole('button', { name: /^Edit slot .*Juice.*taken$/ }).click();
     // The server refuses every slot save from here on.
     await page.route(`**/api/slots/${draft.slotId}`, (route) =>
       route.request().method() === 'PATCH'
@@ -802,7 +802,7 @@ test.describe('Publish’s check, around the Build tab', () => {
       values: { what: 'Juice', date: '2030-04-06' },
     });
     await page.goto(`/app/signups/${draft.id}/build`);
-    await page.getByRole('button', { name: /^Edit slot .*Juice/ }).click();
+    await page.getByRole('button', { name: /^Edit slot .*Juice.*taken$/ }).click();
     // Well inside the 800 ms a cell waits before it saves.
     await page.getByRole('textbox', { name: 'What value' }).fill('TBD');
     await page.getByRole('tab', { name: 'Responses' }).click();

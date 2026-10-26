@@ -4,7 +4,7 @@ import { useState } from 'react';
 import { Copy, GripVertical, Pencil, Trash2 } from 'lucide-react';
 import { SlotEditor } from './SlotEditor';
 import { emptyHeaderCopy } from './prettyHeader';
-import { placeholderMark, slotRowLabel } from './slotRow';
+import { placeholderMark, slotActionLabels, slotRowLabel, takenText } from './slotRow';
 import { renderFieldValue } from '@/lib/slot-label';
 import type { SignupStatus } from '@/schemas/signups';
 import type { UseReorderableResult } from '../build-shared/useReorderable';
@@ -80,30 +80,6 @@ export function WysiwygSlot({
   // the visual reveal via group-hover / group-focus-within; this state mirrors
   // those triggers for the JS-only attributes that CSS cannot set.
   const [interactive, setInteractive] = useState(false);
-  if (expanded) {
-    return (
-      <div
-        data-testid={`wysiwyg-slot-${row.id}`}
-        className="border-t border-b border-surface-sunk bg-surface-raised first:rounded-t-[11px] first:border-t-0"
-      >
-        <SlotEditor
-          row={row}
-          fields={fields}
-          focusOnOpen={focusOnOpen}
-          {...(onFocused ? { onFocused } : {})}
-          taken={taken}
-          remindersOn={remindersOn}
-          onCellChange={onEditCell}
-          onCapacity={onSetCapacity}
-          onAddEnumOption={onAddEnumOption}
-          onDuplicate={onDuplicate}
-          onDelete={onDelete}
-          onClose={onCollapse}
-        />
-      </div>
-    );
-  }
-
   // Anchor = first field in the organizer's chosen order. No type-based
   // promotion: a time field later in the list must not win over field 0.
   // Values render as the public page renders them, so the organizer sees
@@ -133,16 +109,41 @@ export function WysiwygSlot({
   // Any field counts, the group's too, as in Publish's check.
   const mark = placeholderMark(row.values, fields, status);
 
-  // aria-label must mirror the visible primary label — including the empty-state
-  // placeholder — so multiple empty rows aren't exposed as identical "Edit slot"
-  // to assistive tech, and say the tag. (aria-label overrides the button's text
-  // content.)
-  const ariaLabel = slotRowLabel({
-    anchor: anchorValue,
-    time: isTimeAnchor,
-    prompt: placeholder,
-    mark,
-  });
+  // aria-label must mirror what the row shows — the primary label, including
+  // the empty-state placeholder, so multiple empty rows aren't exposed as
+  // identical "Edit slot" to assistive tech, then the tag and the count.
+  // (aria-label overrides the button's text content.) The toolbar's buttons
+  // and the open editor are named for the slot the same way.
+  const nameParts = { anchor: anchorValue, time: isTimeAnchor, prompt: placeholder };
+  const actions = slotActionLabels(nameParts);
+  const count = takenText(taken, row.capacity);
+
+  if (expanded) {
+    return (
+      <div
+        data-testid={`wysiwyg-slot-${row.id}`}
+        className="border-t border-b border-surface-sunk bg-surface-raised first:rounded-t-[11px] first:border-t-0"
+      >
+        <SlotEditor
+          row={row}
+          label={actions.editing}
+          fields={fields}
+          focusOnOpen={focusOnOpen}
+          {...(onFocused ? { onFocused } : {})}
+          taken={taken}
+          remindersOn={remindersOn}
+          onCellChange={onEditCell}
+          onCapacity={onSetCapacity}
+          onAddEnumOption={onAddEnumOption}
+          onDuplicate={onDuplicate}
+          onDelete={onDelete}
+          onClose={onCollapse}
+        />
+      </div>
+    );
+  }
+
+  const ariaLabel = slotRowLabel({ ...nameParts, mark, count });
 
   const anchorSizing = summary ? 'max-w-[60%] shrink-0' : 'min-w-0';
 
@@ -186,6 +187,9 @@ export function WysiwygSlot({
         type="button"
         onClick={onExpand}
         aria-label={ariaLabel}
+        // Where BuildWysiwyg finds the row to put focus back on when its
+        // editor closes.
+        data-slot-row={row.id}
         className="flex w-full items-center justify-between gap-2.5 border-none bg-transparent px-3.5 py-2.5 text-left"
       >
         {/* The anchor keeps its natural width (capped, so a long first value
@@ -236,20 +240,20 @@ export function WysiwygSlot({
         {/* Spots taken, not left: organizers want to know how many signed up.
             The public page counts what's left. */}
         <span className="shrink-0 text-[11px] tabular-nums text-ink-soft">
-          {row.capacity === null ? `${taken} taken` : `${taken} of ${row.capacity} taken`}
+          {count}
         </span>
       </button>
       <div
         className="absolute right-2 top-1.5 flex gap-px rounded-md border border-surface-sunk bg-white p-0.5 opacity-0 shadow-sm transition-opacity duration-180 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto"
         inert={!interactive}
       >
-        <ToolbarButton label="Edit" onClick={onExpand}>
+        <ToolbarButton label={actions.edit} onClick={onExpand}>
           <Pencil size={11} />
         </ToolbarButton>
-        <ToolbarButton label="Duplicate" onClick={onDuplicate}>
+        <ToolbarButton label={actions.duplicate} onClick={onDuplicate}>
           <Copy size={11} />
         </ToolbarButton>
-        <ToolbarButton label="Delete" danger onClick={onDelete}>
+        <ToolbarButton label={actions.delete} danger onClick={onDelete}>
           <Trash2 size={11} />
         </ToolbarButton>
       </div>

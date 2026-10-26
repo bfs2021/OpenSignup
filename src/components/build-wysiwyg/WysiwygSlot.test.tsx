@@ -113,26 +113,26 @@ describe('WysiwygSlot — collapsed', () => {
 
   it('clicking the row body calls onExpand', () => {
     const { onExpand } = renderSlot();
-    fireEvent.click(screen.getByRole('button', { name: /Edit slot at 9:00\u00a0AM/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Edit slot at 9:00\u00a0AM, 0 of 2 taken' }));
     expect(onExpand).toHaveBeenCalled();
   });
 
   it('toolbar Edit button calls onExpand', () => {
     const { onExpand } = renderSlot();
-    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Edit slot at 9:00\u00a0AM' }));
     expect(onExpand).toHaveBeenCalled();
   });
 
   it('toolbar Duplicate calls onDuplicate and stops propagation (no expand)', () => {
     const { onExpand, onDuplicate } = renderSlot();
-    fireEvent.click(screen.getByRole('button', { name: 'Duplicate' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Duplicate slot at 9:00\u00a0AM' }));
     expect(onDuplicate).toHaveBeenCalled();
     expect(onExpand).not.toHaveBeenCalled();
   });
 
   it('toolbar Delete calls onDelete and stops propagation', () => {
     const { onExpand, onDelete } = renderSlot();
-    fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Delete slot at 9:00\u00a0AM' }));
     expect(onDelete).toHaveBeenCalled();
     expect(onExpand).not.toHaveBeenCalled();
   });
@@ -262,7 +262,7 @@ describe('WysiwygSlot — a slot that still says TBD', () => {
     expect(row.className).toMatch(/\bhover:bg-surface-raised\/50\b/);
     expect(row.className).toMatch(/\bfocus-within:bg-surface-raised\/50\b/);
     const button = screen.getByRole('button', {
-      name: 'Edit slot at 1:00\u00a0PM, still says “TBD”',
+      name: 'Edit slot at 1:00\u00a0PM, still says “TBD”, 0 of 2 taken',
     });
     // After the anchor and the summary, inside the row's button.
     expect(button.textContent).toBe('1:00\u00a0PMJob TBDStill says “TBD”0 of 2 taken');
@@ -290,7 +290,7 @@ describe('WysiwygSlot — a slot that still says TBD', () => {
     renderSlot({ row: marked('tba'), status: 'open' });
     expect(screen.getByText('People can see “TBA”')).toBeTruthy();
     expect(
-      screen.getByRole('button', { name: 'Edit slot at 1:00\u00a0PM, people can see “TBA”' }),
+      screen.getByRole('button', { name: 'Edit slot at 1:00\u00a0PM, people can see “TBA”, 0 of 2 taken' }),
     ).toBeTruthy();
   });
 
