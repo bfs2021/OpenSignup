@@ -37,7 +37,16 @@ export function TabsNav({ signupId, counts }: TabsNavProps) {
   })();
 
   useEffect(() => {
-    activeRef.current?.scrollIntoView({ inline: 'center', block: 'nearest' });
+    // scrollIntoView would also move Chrome's next-Tab start point past the
+    // current tab, skipping the whole header on load (#644). Scrolling the
+    // strip itself keeps the tab in view without touching the sequential
+    // focus navigation starting position. Plain scrollLeft, which jsdom
+    // implements too, rather than scrollTo.
+    const tablist = activeRef.current?.parentElement;
+    const el = activeRef.current;
+    if (!tablist || !el) return;
+    tablist.scrollLeft =
+      el.offsetLeft - (tablist.clientWidth - el.offsetWidth) / 2;
   }, [activeTab]);
 
   return (
