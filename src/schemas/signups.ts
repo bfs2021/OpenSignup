@@ -75,7 +75,7 @@ export function sendsReminders(settings: unknown): boolean {
   return parsed.success ? parsed.data.sendReminders : true;
 }
 
-const TITLE_MIN_LENGTH = 2;
+export const TITLE_MIN_LENGTH = 2;
 export const TITLE_MAX_LENGTH = 120;
 export const DESCRIPTION_MAX_LENGTH = 2000;
 

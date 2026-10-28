@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { NAME_MAX_LENGTH } from '@/lib/participant-limits';
 import { EmailSchema, NameSchema, normalizeEmail } from './common';
 
 describe('EmailSchema', () => {
@@ -36,8 +37,8 @@ describe('NameSchema', () => {
     expect(NameSchema.safeParse(name).success).toBe(false);
   });
 
-  it('refuses a name over 100 characters', () => {
-    expect(NameSchema.safeParse('a'.repeat(101)).success).toBe(false);
-    expect(NameSchema.safeParse('a'.repeat(100)).success).toBe(true);
+  it('refuses a name over the limit', () => {
+    expect(NameSchema.safeParse('a'.repeat(NAME_MAX_LENGTH + 1)).success).toBe(false);
+    expect(NameSchema.safeParse('a'.repeat(NAME_MAX_LENGTH)).success).toBe(true);
   });
 });

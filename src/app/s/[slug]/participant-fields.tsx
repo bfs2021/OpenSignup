@@ -1,4 +1,5 @@
 import type { InputHTMLAttributes, ReactNode, Ref } from 'react';
+import { NOTES_MAX_LENGTH } from '@/lib/participant-limits';
 
 const INPUT_CLASS =
   'focus:border-brand focus:ring-brand w-full rounded-lg border border-surface-sunk px-4 py-3 focus:outline-none focus:ring-1';
@@ -42,7 +43,7 @@ export function NotesAndSpots({
 }) {
   return (
     <div className={spots ? 'grid grid-cols-[1fr_auto] gap-3' : undefined}>
-      <Field label="Notes (optional)" type="text" name="notes" maxLength={500} {...notes} />
+      <Field label="Notes (optional)" type="text" name="notes" maxLength={NOTES_MAX_LENGTH} {...notes} />
       {spots ? (
         <Field
           label="Spots"
