@@ -142,6 +142,16 @@ export function BuildWysiwyg({
   const displayFields = state.fields.filter((f) => f.ref !== groupField?.ref);
 
   const groups = useMemo(() => partitionRows(state.rows, groupField), [state.rows, groupField]);
+  // Groups are keyed by their value, so a heading rename would remount the
+  // group. A click outside the heading's picker commits it on mousedown, and
+  // the remount before mouseup lost the click: Add a slot under the renamed
+  // group did nothing. So a renamed group keeps the React key it had, by
+  // mapping each new value to the key it started under.
+  const [renamedFrom, setRenamedFrom] = useState<Record<string, string>>({});
+  const groupKey = (key: string) => {
+    const from = renamedFrom[key];
+    return from && !groups.some((g) => g.key === from) ? from : key;
+  };
 
   const slotReorder = useReorderable<BuildRow>({
     items: state.rows,
@@ -280,6 +290,12 @@ export function BuildWysiwyg({
       })
       .map((r) => r.id);
     setFailedRenameKey(null);
+    setRenamedFrom((prev) => {
+      const from = prev[oldKey] ?? oldKey;
+      const next = Object.fromEntries(Object.entries(prev).filter(([, k]) => k !== from));
+      if (from !== newKey) next[newKey] = from;
+      return next;
+    });
     void renameGroup(ref, rowIds, newKey).then((saved) => {
       if (!saved) setFailedRenameKey(oldKey);
     });
@@ -324,7 +340,7 @@ export function BuildWysiwyg({
           <div className="mt-5 flex flex-col gap-4 md:mt-6 md:gap-5">
             {groups.map((g) => (
               <WysiwygGroup
-                key={g.key}
+                key={groupKey(g.key)}
                 group={g}
                 groupField={groupField}
                 displayFields={displayFields}
@@ -341,10 +357,9 @@ export function BuildWysiwyg({
                   const field = state.fields.find((f) => f.id === fieldId);
                   if (!field || field.config.fieldType !== 'enum') return;
                   if (field.config.choices.includes(value)) return;
-                  // Return the in-flight promise so the EnumPicker can await
-                  // it before committing the cell value — keeps the slot PATCH
-                  // from racing the field-config update on slow networks.
-                  return updateField(fieldId, {
+                  // Slot saves wait for this one, so the server never sees
+                  // the new value before it is in `choices`.
+                  void updateField(fieldId, {
                     config: { fieldType: 'enum', choices: [...field.config.choices, value] },
                   });
                 }}
