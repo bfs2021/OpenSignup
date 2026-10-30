@@ -38,7 +38,9 @@ describe('NameSchema', () => {
   });
 
   it('refuses a name over the limit', () => {
-    expect(NameSchema.safeParse('a'.repeat(NAME_MAX_LENGTH + 1)).success).toBe(false);
-    expect(NameSchema.safeParse('a'.repeat(NAME_MAX_LENGTH)).success).toBe(true);
+    // The literal keeps a typo in the public constant observable here.
+    expect(NAME_MAX_LENGTH).toBe(100);
+    expect(NameSchema.safeParse('a'.repeat(101)).success).toBe(false);
+    expect(NameSchema.safeParse('a'.repeat(100)).success).toBe(true);
   });
 });
