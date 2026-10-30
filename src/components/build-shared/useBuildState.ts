@@ -2,7 +2,7 @@ import { useReducer, useRef, useEffect, useState } from 'react';
 import { toFieldRef } from '@/schemas/slot-fields';
 import type { SlotFieldDefinition, SlotFieldConfig } from '@/schemas/slot-fields';
 import type { SignupSettings } from '@/schemas/signups';
-import { DESCRIPTION_MAX_LENGTH, TITLE_MAX_LENGTH, TITLE_MIN_LENGTH } from '@/schemas/signups';
+import { DESCRIPTION_MAX_LENGTH, TITLE_MAX_LENGTH, TITLE_MIN_LENGTH } from '@/lib/signup-limits';
 import type { ErrorCode } from '@/lib/errors';
 import { resolveAnchorRef } from '@/lib/reminder-fields';
 
