@@ -35,11 +35,12 @@ type WysiwygGroupProps = {
   focusRowId?: string | null;
   /** Called once that row's editor has taken focus. */
   onRowFocused?: () => void;
-  onExpandRow: (rowId: string | null) => void;
+  /** Opens a row's editor (`byKeyboard` as `WysiwygSlot`'s `onExpand`), or closes it with null. */
+  onExpandRow: (rowId: string | null, byKeyboard?: boolean) => void;
   onEditCell: (rowId: string, fieldRef: string, value: string) => void;
   onSetCapacity: (rowId: string, capacity: number | null) => void;
-  /** Threaded through to EnumPicker; may return a promise the picker awaits. */
-  onAddEnumOption: (fieldId: string, value: string) => void | Promise<void>;
+  /** Threaded through to EnumPicker. */
+  onAddEnumOption: (fieldId: string, value: string) => void;
   onDuplicateRow: (rowId: string) => void;
   onDeleteRow: (rowId: string) => void;
   onAddSlot: (groupKey: string) => void;
@@ -113,7 +114,7 @@ export function WysiwygGroup({
             expanded={expandedRowId === row.id}
             focusOnOpen={focusRowId === row.id}
             {...(onRowFocused ? { onFocused: onRowFocused } : {})}
-            onExpand={() => onExpandRow(row.id)}
+            onExpand={(byKeyboard) => onExpandRow(row.id, byKeyboard)}
             onCollapse={() => onExpandRow(null)}
             onEditCell={(ref, v) => onEditCell(row.id, ref, v)}
             onSetCapacity={(c) => onSetCapacity(row.id, c)}

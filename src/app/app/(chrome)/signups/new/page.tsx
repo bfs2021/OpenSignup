@@ -2,7 +2,7 @@ import { requireOrganizerSession } from '@/auth/session';
 import { AsyncSubmitButton } from '@/components/ui/async-submit-button';
 import { FormError } from '@/components/ui/form-error';
 import { trackOrganizerView } from '@/lib/view-tracker';
-import { magicComposeEnabled } from '@/lib/env';
+import { getEnv, magicComposeEnabled } from '@/lib/env';
 import { MagicComposeRoot } from '@/components/magic-compose/MagicComposeRoot';
 import { DESCRIPTION_MAX_LENGTH, TITLE_MAX_LENGTH, TITLE_MIN_LENGTH } from '@/schemas/signups';
 import { createSignupAction } from './actions';
@@ -29,7 +29,7 @@ export default async function NewSignupPage({ searchParams }: PageProps) {
   }
 
   if (useMagic) {
-    return <MagicComposeRoot />;
+    return <MagicComposeRoot llmTimeoutMs={getEnv().LLM_TIMEOUT_MS} />;
   }
 
   return (
