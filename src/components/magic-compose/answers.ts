@@ -46,6 +46,17 @@ export const NO_ANSWERS: Answers = {
   counts: {},
 };
 
+/**
+ * The boxes as the screen first shows them. When the model didn't ask "what"
+ * (the description already says it), the things it read from the description
+ * start out picked, for the organizer to keep, remove or add to.
+ */
+export function startingAnswers(questions: MagicComposeQuestions): Answers {
+  return questions.topics.includes('what')
+    ? NO_ANSWERS
+    : { ...NO_ANSWERS, picked: [...questions.whatOptions] };
+}
+
 const same = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
 
 export function answeredItems(answers: Answers): string[] {
@@ -79,8 +90,13 @@ export function addPending(answers: Answers, options: string[]): Answers {
   return { ...cleared, added: [...answers.added, text] };
 }
 
-export function removeAdded(answers: Answers, item: string): Answers {
-  return { ...answers, added: answers.added.filter((a) => a !== item) };
+/** Takes an item off the list, whether it was picked or added. */
+export function removeItem(answers: Answers, item: string): Answers {
+  return {
+    ...answers,
+    picked: answers.picked.filter((p) => p !== item),
+    added: answers.added.filter((a) => a !== item),
+  };
 }
 
 /**
@@ -123,24 +139,11 @@ function whenAnswer(answers: Answers): WhenAnswer {
 
 /**
  * The answers as the server takes them (see `FollowUp`): one key per topic
- * that was asked, every value in its tidy or skipped form. `placeholders` is
- * for Draft with placeholders when nothing is answered (see `hasAnswers`): it
- * sends every asked topic skipped, whatever the boxes hold, as the server
- * refuses the flag beside any answer.
+ * that was asked, every value in its tidy or skipped form. With nothing
+ * answered, every topic goes skipped and the draft uses placeholders.
  */
-export function buildFollowUp(
-  questions: MagicComposeQuestions,
-  answers: Answers,
-  { placeholders = false }: { placeholders?: boolean } = {},
-): FollowUp {
+export function buildFollowUp(questions: MagicComposeQuestions, answers: Answers): FollowUp {
   const asks = (topic: MagicComposeQuestions['topics'][number]) => questions.topics.includes(topic);
-  if (placeholders) {
-    return {
-      what: { picked: [], added: [] },
-      ...(asks('when') ? { when: { kind: 'not_decided' as const } } : {}),
-      placeholders: true,
-    };
-  }
   const what = {
     picked: answers.picked.filter((p) => questions.whatOptions.includes(p)),
     added: answers.added,
@@ -162,18 +165,6 @@ export function buildFollowUp(
  */
 export function sameAnswers(a: Answers, b: Answers): boolean {
   return JSON.stringify(a) === JSON.stringify(b);
-}
-
-/**
- * Whether any box holds an answer: an item (words still in "Add your own"
- * included), a day or days, or a time. Draft with placeholders then drafts
- * from them, as Draft my signup does, rather than dropping them.
- */
-export function hasAnswers(questions: MagicComposeQuestions, answers: Answers): boolean {
-  if (answeredItems(answers).length > 0 || tidyText(answers.pending)) return true;
-  if (!questions.topics.includes('when')) return false;
-  if (answers.when === 'one_day') return Boolean(answers.date || answers.from || answers.to);
-  return answers.when === 'several' && tidyText(answers.several) !== '';
 }
 
 /**

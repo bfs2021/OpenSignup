@@ -14,9 +14,12 @@ export const QUESTION_TOPICS = ['what', 'when', 'how_many'] as const;
 type QuestionTopic = (typeof QUESTION_TOPICS)[number];
 
 /**
- * The model's reply when the description doesn't say what people sign up for.
- * `topics` always includes `what`, each topic once; `whatOptions` holds two to
- * four distinct things people could sign up for.
+ * The model's reply when it can't draft real slots, each topic once. Asking
+ * `what` (the description doesn't say what people sign up for),
+ * `whatOptions` holds two to four distinct things people could sign up for.
+ * Not asking it (the description says what, but every slot would be a "TBD:"
+ * placeholder), `topics` includes `when`, and `whatOptions` holds one to four
+ * things the description names, which the page shows already picked.
  */
 export interface MagicComposeQuestions {
   topics: QuestionTopic[];
@@ -50,13 +53,6 @@ export interface FollowUp {
    * when "how many" was asked and there are items to count.
    */
   howMany?: Array<number | null>;
-  /**
-   * The organizer pressed Draft with placeholders with nothing answered (with
-   * answers, the page sends them as Draft my signup does). Every answer is then
-   * in its skipped form; the flag only tells that apart from leaving
-   * everything blank.
-   */
-  placeholders?: true;
 }
 
 /**
@@ -71,4 +67,14 @@ export function tidyText(text: string): string {
 /** The items a follow-up drafts from, in the order `howMany` counts them. */
 export function followUpItems(followUp: FollowUp): string[] {
   return [...followUp.what.picked, ...followUp.what.added];
+}
+
+/**
+ * Every answer in its skipped form: nothing to sign up for and no day, so the
+ * draft is all placeholders. (`howMany` comes only with items.)
+ */
+export function answeredNothing(followUp: FollowUp): boolean {
+  return (
+    followUpItems(followUp).length === 0 && (!followUp.when || followUp.when.kind === 'not_decided')
+  );
 }

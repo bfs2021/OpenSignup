@@ -57,6 +57,17 @@ async function openQuestions(prompt = 'Bake sale') {
   return screen.findByRole('heading', { name: 'A few details first' });
 }
 
+const addBox = () => screen.getByRole('textbox', { name: 'Add your own, then press Enter' });
+
+/** Adds each item from "Add your own" with Enter, as a keyboard user would. */
+function addWithEnter(...items: string[]) {
+  for (const item of items) {
+    addBox().focus();
+    fireEvent.change(addBox(), { target: { value: item } });
+    fireEvent.keyDown(addBox(), { key: 'Enter' });
+  }
+}
+
 /** Picks two options, adds two of their own (Enter, then Add), counts, and a day. */
 function answerEverything() {
   fireEvent.click(screen.getByRole('button', { name: 'Bake something to sell' }));
@@ -146,7 +157,6 @@ describe('<MagicComposeRoot /> questions', () => {
     expect(screen.getByText('Reading your description').closest('li')).not.toHaveAttribute(
       'aria-current',
     );
-    expect(screen.getByText('Your answers')).toBeInTheDocument();
     // First in the page, so Shift+Tab from the heading reaches it, and a phone shows it top left.
     const back = screen.getByRole('button', { name: 'Back' });
     expect(back.compareDocumentPosition(heading) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
@@ -239,18 +249,14 @@ describe('<MagicComposeRoot /> questions', () => {
     );
   });
 
-  it('sends no answers for Draft with placeholders when nothing is answered', async () => {
+  it('drafts every topic as a placeholder when nothing is answered', async () => {
     const sent = stubReplies(asks(), 'hang');
     await openQuestions();
-    fireEvent.click(screen.getByRole('button', { name: 'Draft with placeholders' }));
+    fireEvent.click(screen.getByRole('button', { name: /Draft my signup/ }));
     const card = await screen.findByRole('region', { name: 'Drafting from' });
     expect(sent(1)).toEqual({
       prompt: 'Bake sale',
-      followUp: {
-        what: { picked: [], added: [] },
-        when: { kind: 'not_decided' },
-        placeholders: true,
-      },
+      followUp: { what: { picked: [], added: [] }, when: { kind: 'not_decided' } },
     });
     expect(within(card).getByText('Two left blank')).toBeInTheDocument();
     expect(
@@ -265,60 +271,13 @@ describe('<MagicComposeRoot /> questions', () => {
     ).toBeInTheDocument();
   });
 
-  it('sends the answers given for Draft with placeholders, as Draft my signup would', async () => {
-    const sent = stubReplies(asks(), 'hang');
+  it('carries the description over to the form for filling in by hand', async () => {
+    stubReplies(asks());
     await openQuestions();
-    answerEverything();
-    fireEvent.click(screen.getByRole('button', { name: 'Draft with placeholders' }));
-    await screen.findByRole('region', { name: 'Drafting from' });
-    expect(sent(1)).toEqual({ prompt: 'Bake sale', followUp: ANSWERED });
-  });
-
-  it('keeps a single pick, or words left in "Add your own", for Draft with placeholders', async () => {
-    const sent = stubReplies(asks(), 'hang');
-    await openQuestions();
-    fireEvent.click(screen.getByRole('button', { name: 'Bake something to sell' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Draft with placeholders' }));
-    const card = await screen.findByRole('region', { name: 'Drafting from' });
-    expect(sent(1)).toEqual({
-      prompt: 'Bake sale',
-      followUp: {
-        what: { picked: ['Bake something to sell'], added: [] },
-        when: { kind: 'not_decided' },
-        howMany: [null],
-      },
-    });
-    expect(within(card).getByText('One left blank')).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
-    await screen.findByRole('heading', { name: 'A few details first' });
-    fireEvent.click(screen.getByRole('button', { name: 'Bake something to sell' }));
-    fireEvent.change(screen.getByRole('textbox', { name: 'Add your own, then press Enter' }), {
-      target: { value: 'Bring drinks' },
-    });
-    fireEvent.click(screen.getByRole('button', { name: 'Draft with placeholders' }));
-    await screen.findByRole('region', { name: 'Drafting from' });
-    expect(sent(2)).toEqual({
-      prompt: 'Bake sale',
-      followUp: {
-        what: { picked: [], added: ['Bring drinks'] },
-        when: { kind: 'not_decided' },
-        howMany: [null],
-      },
-    });
-  });
-
-  it('stops for Draft with placeholders what it stops for Draft my signup', async () => {
-    const sent = stubReplies(asks());
-    await openQuestions();
-    fireEvent.change(screen.getByLabelText('Starts'), {
-      target: { value: '09:00' },
-    });
-    fireEvent.click(screen.getByRole('button', { name: 'Draft with placeholders' }));
-    expect(await screen.findByRole('alert')).toHaveTextContent(
-      'Add a date, or leave the times empty.',
+    expect(screen.getByRole('link', { name: 'Fill in by hand instead' })).toHaveAttribute(
+      'href',
+      '/app/signups/new?manual=1&title=Bake+sale',
     );
-    expect(() => sent(1)).toThrow();
   });
 
   it('adds words left in "Add your own" rather than dropping them', async () => {
@@ -574,17 +533,6 @@ describe('<MagicComposeRoot /> focus after Back', () => {
 });
 
 describe('<MagicComposeRoot /> questions focus', () => {
-  const addBox = () => screen.getByRole('textbox', { name: 'Add your own, then press Enter' });
-
-  /** Adds each item from "Add your own" with Enter, as a keyboard user would. */
-  function addWithEnter(...items: string[]) {
-    for (const item of items) {
-      addBox().focus();
-      fireEvent.change(addBox(), { target: { value: item } });
-      fireEvent.keyDown(addBox(), { key: 'Enter' });
-    }
-  }
-
   it('stays in "Add your own" after Add, which goes away, and after Enter', async () => {
     stubReplies(asks());
     await openQuestions();
@@ -630,5 +578,81 @@ describe('<MagicComposeRoot /> questions focus', () => {
     remove.focus();
     fireEvent.click(remove);
     expect(addBox()).toHaveFocus();
+  });
+});
+
+// "Snack sign up" says what but gives nothing to make a real slot from, so the
+// model asks when, and reads what from the description instead of asking it.
+describe('<MagicComposeRoot /> questions when the description says what', () => {
+  const KNOWN: MagicComposeQuestions = {
+    topics: ['when', 'how_many'],
+    whatOptions: ['Bring snacks'],
+  };
+
+  it('shows what the description names as picked chips, with a heading that tells rather than asks', async () => {
+    stubReplies(asks(KNOWN));
+    await openQuestions('Snack sign up');
+    expect(screen.getByText('What people sign up for')).toBeInTheDocument();
+    expect(screen.queryByText('What do people sign up for?')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Remove Bring snacks' })).toBeInTheDocument();
+    // No options to pick: the chip is the only button for it.
+    expect(screen.queryByRole('button', { name: 'Bring snacks' })).toBeNull();
+    expect(screen.getByText('When is it?')).toBeInTheDocument();
+    expect(screen.getByRole('spinbutton', { name: 'People for Bring snacks' })).toBeInTheDocument();
+  });
+
+  it('sends the chips in what.picked, as Draft my signup does for picked options', async () => {
+    const sent = stubReplies(asks(KNOWN), 'hang');
+    await openQuestions('Snack sign up');
+    fireEvent.click(screen.getByRole('button', { name: /Draft my signup/ }));
+    await screen.findByRole('heading', { name: 'Drafting your signup' });
+    expect(sent(1)).toEqual({
+      prompt: 'Snack sign up',
+      followUp: {
+        what: { picked: ['Bring snacks'], added: [] },
+        when: { kind: 'not_decided' },
+        howMany: [null],
+      },
+    });
+  });
+
+  it('lets a chip be removed, your own added, and the removed one typed back', async () => {
+    const sent = stubReplies(asks(KNOWN), 'hang');
+    await openQuestions('Snack sign up');
+    const remove = screen.getByRole('button', { name: 'Remove Bring snacks' });
+    remove.focus();
+    fireEvent.click(remove);
+    expect(screen.queryByRole('button', { name: 'Remove Bring snacks' })).toBeNull();
+    expect(screen.queryAllByRole('spinbutton')).toHaveLength(0);
+    expect(addBox()).toHaveFocus();
+
+    addWithEnter('Bring drinks', 'bring snacks');
+    expect(screen.getAllByRole('spinbutton').map((r) => r.getAttribute('aria-label'))).toEqual([
+      'People for Bring snacks',
+      'People for Bring drinks',
+    ]);
+    fireEvent.change(screen.getByRole('spinbutton', { name: 'People for Bring drinks' }), {
+      target: { value: '2' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /Draft my signup/ }));
+    await screen.findByRole('heading', { name: 'Drafting your signup' });
+    expect(sent(1)).toEqual({
+      prompt: 'Snack sign up',
+      followUp: {
+        what: { picked: ['Bring snacks'], added: ['Bring drinks'] },
+        when: { kind: 'not_decided' },
+        howMany: [null, 2],
+      },
+    });
+  });
+
+  it('moves focus from a removed chip to the next one, picked or added', async () => {
+    stubReplies(asks({ topics: ['when'], whatOptions: ['Bring snacks', 'Bring drinks'] }));
+    await openQuestions('Snack sign up');
+    addWithEnter('Set up');
+    const first = screen.getByRole('button', { name: 'Remove Bring drinks' });
+    first.focus();
+    fireEvent.click(first);
+    expect(screen.getByRole('button', { name: 'Remove Set up' })).toHaveFocus();
   });
 });

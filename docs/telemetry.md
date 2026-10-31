@@ -45,7 +45,7 @@ by `clientDomain` instead.
 |---|---|---|---|
 | `signup.created` | organizer | `{ templateId, fieldsAdded, slotsAdded }` — `templateId` is `default`, `magic-compose`, or `mcp` (created by a connected assistant) | `services/signups.ts` |
 | `signup.updated` | organizer | `{ changed }` (the keys the update sent, changed or not) | `services/signups.ts` |
-| `signup.published` | organizer | `{ from, to }`. Rows written before Publish stopped warning about slots that say TBD, TBC or TBA can also carry `acknowledged: 'placeholder'`: the organizer chose Publish anyway past that warning. New rows never do | `services/signups.ts` (`publishSignup`) |
+| `signup.published` | organizer | `{ from, to }`, plus `clearedClosesAt` (the closing time it removed, as an ISO string) when the signup's closing time had already passed. Rows written before Publish stopped warning about slots that say TBD, TBC or TBA can also carry `acknowledged: 'placeholder'`: the organizer chose Publish anyway past that warning. New rows never do | `services/signups.ts` (`publishSignup`) |
 | `signup.closed` | organizer | `{ from, to }` | `services/signups.ts` |
 | `signup.reopened` | organizer | `{ from, to }`, plus `clearedClosesAt` (the closing time it removed, as an ISO string) when the signup's closing time had already passed | `services/signups.ts` |
 | `signup.archived` | organizer | `{ from, to }` | `services/signups.ts` |
@@ -97,24 +97,30 @@ Signup lifecycle above. These two count the questions round.
 
 | event | actor | payload | fired from |
 |---|---|---|---|
-| `magic_compose.asked` | organizer | `{ topics, options }`: the topics the model asked about (`what`, `when`, `how_many`; always `what`) and how many options it offered for "what" (2 to 4), never the options themselves | `POST /api/signups/magic-compose`, on a first call the model answered with questions instead of a draft, unless the organizer had already left |
-| `magic_compose.answered` | organizer | `{ answered, skipped, picked, added, limits, placeholders, retried, gaveUp }`, described below | `POST /api/signups/magic-compose`, once a follow-up (a call carrying the organizer's answers) has ended, however it ended: a draft, a refusal, an error or `asked_again`. One row per follow-up the hourly quota was charged for |
+| `magic_compose.asked` | organizer | `{ topics, options }`: the topics the model asked about (`what`, `when`, `how_many`; `what` or `when` or both) and how many options it offered for "what" (2 to 4), or, without `what`, how many things it read from the description (1 to 4), which the page shows already picked; never the options themselves | `POST /api/signups/magic-compose`, on a first call the model answered with questions instead of a draft, unless the organizer had already left |
+| `magic_compose.answered` | organizer | `{ answered, skipped, picked, added, limits, retried, gaveUp }`, described below | `POST /api/signups/magic-compose`, once a follow-up (a call carrying the organizer's answers) has ended, however it ended: a draft, a refusal, an error or `asked_again`. One row per follow-up the hourly quota was charged for |
 
 In `magic_compose.answered`:
 
 - `answered` and `skipped` list which of `what` and `when` the organizer
-  answered or left blank, for the ones they were asked. "How many" has no
-  blank state (an empty box means no limit), so it is in neither.
-- `picked` is how many of the model's options the organizer picked, and
+  answered or left blank. `when` is there only if it was asked. `what` is
+  always there: when it wasn't asked, it is in `answered` if any of the
+  things read from the description (or the organizer's own) went back, and
+  in `skipped` if all were removed, so a count of `what` answers has to be
+  read alongside `magic_compose.asked`'s topics. "How many" has no blank
+  state (an empty box means no limit), so it is in neither.
+- `picked` is how many of the model's options the organizer picked (when
+  "what" wasn't asked, how many of the things read from the description they
+  kept), and
   `added` how many things of their own they added. These are the browser's
   claim: it sends the two lists apart, and the server can't check which items
   came from the options.
 - `limits` is how many of those things were given a number of people (`0`
   when "how many" wasn't asked).
-- `placeholders` is `true` when the organizer pressed Draft with placeholders
-  without answering anything. Every answer is then blank; the flag tells it
-  apart from leaving them all blank by hand. With any answer given, that
-  button sends the answers as Draft my signup does, so the flag is `false`.
+- Older rows also carry `placeholders`, from a Draft with placeholders button
+  the questions screen no longer has: `true` when it was pressed with nothing
+  answered. It drafted exactly as Draft my signup does with every answer left
+  blank, so newer rows count those in `skipped` alone.
 - `retried` is `true` when the model answered with questions again and the
   server asked it once more, more firmly, without charging the quota again:
   one more call to the AI.

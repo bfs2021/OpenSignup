@@ -62,7 +62,6 @@ export const FollowUpSchema: z.ZodType<FollowUp, z.ZodTypeDef, unknown> = z
       .strict(),
     when: WhenSchema.optional(),
     howMany: z.array(CountSchema).optional(),
-    placeholders: z.literal(true).optional(),
   })
   .strict()
   .superRefine((f, ctx) => {
@@ -93,16 +92,6 @@ export const FollowUpSchema: z.ZodType<FollowUp, z.ZodTypeDef, unknown> = z
         code: z.ZodIssueCode.custom,
         path: ['howMany'],
         message: 'Give one count for each thing people sign up for',
-      });
-    }
-    if (
-      f.placeholders &&
-      (items.length > 0 || f.howMany !== undefined || (f.when && f.when.kind !== 'not_decided'))
-    ) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ['placeholders'],
-        message: 'Draft with placeholders sends no answers',
       });
     }
   });
@@ -167,8 +156,9 @@ export function buildFollowUpMessages(
 
 /**
  * A first call's one retry, when the model asked questions in a shape the
- * page can't ask (no "what", one option): the description again, then the
- * firm line, so the model drafts with placeholders instead.
+ * page can't ask (neither "what" nor "when", one option for "what"): the
+ * description again, then the firm line, so the model drafts with
+ * placeholders instead.
  */
 export function buildReplyNowMessages(prompt: string, { now }: { now?: Date } = {}): ChatMessage[] {
   return buildMessages([prompt, '', REPLY_NOW].join('\n'), now);

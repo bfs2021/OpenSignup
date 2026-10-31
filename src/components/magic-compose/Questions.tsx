@@ -26,17 +26,17 @@ import {
   answersProblem,
   appendAnswers,
   buildFollowUp,
-  hasAnswers,
   isFull,
-  NO_ANSWERS,
   parseCount,
-  removeAdded,
+  removeItem,
   sameAnswers,
+  startingAnswers,
   stepCount,
   togglePick,
   timeLength,
   type Answers,
 } from './answers';
+import { handFillHref } from './hand-fill';
 import { DETAILS_STEP, DRAFT_STEPS, FRAME, PulseMark, StepList, type StepRow } from './Steps';
 import { HereDot, StepLine } from './StepLine';
 import { YouWrote } from './YouWrote';
@@ -48,9 +48,10 @@ const WHEN_CHOICES: Array<{ kind: WhenAnswer['kind']; label: string }> = [
   { kind: 'not_decided', label: 'Not decided' },
 ];
 
-// The pills look 34px tall; the button around each one is the 44px target.
+// The pills look 36px tall, as the When choices do; the button around each
+// one is the 44px target.
 const PILL =
-  'inline-flex h-[34px] items-center gap-1.5 rounded-full border px-3 text-sm font-medium';
+  'inline-flex h-9 items-center gap-1.5 rounded-full border px-3 text-[15px] font-medium';
 const PILL_ON = 'border-brand bg-brand/10 text-ink';
 const FOCUS_INSIDE =
   'focus-visible:outline-none group-focus-visible:outline group-focus-visible:outline-2 group-focus-visible:outline-offset-2 group-focus-visible:outline-brand';
@@ -63,11 +64,13 @@ const HINT = 'text-ink-muted text-[13px]';
 type Topic = MagicComposeQuestions['topics'][number];
 
 /**
- * "A few details first": the questions Magic Compose asks when a description
- * doesn't say what people sign up for. Only the asked topics show. The model
- * offers the "what" options; the date and the counts use the page's own
- * controls, so the answers are exact values. Every box lives in `answers`,
- * held by the page, so nothing typed is lost to Cancel or an error.
+ * "A few details first": the questions Magic Compose asks when it can't draft
+ * real slots from a description. Only the asked topics show, but the "what"
+ * list always does: asked, with the model's options to pick from; not asked,
+ * with the things the description names already picked. The date and the
+ * counts use the page's own controls, so the answers are exact values. Every
+ * box lives in `answers`, held by the page, so nothing typed is lost to Cancel
+ * or an error.
  */
 export function Questions({
   prompt,
@@ -103,11 +106,11 @@ export function Questions({
   const [edited, setEdited] = useState(false);
   const errorRef = useRef<HTMLDivElement>(null);
 
-  const answers = held ?? NO_ANSWERS;
+  const answers = held ?? startingAnswers(questions);
   const update = (change: (a: Answers) => Answers) => {
     // Only a real change: − at 1, or a count box left as it was, isn't one.
     if (!sameAnswers(change(answers), answers)) setEdited(true);
-    setAnswers((a) => change(a ?? NO_ANSWERS));
+    setAnswers((a) => change(a ?? startingAnswers(questions)));
   };
   const asks = (topic: Topic) => questions.topics.includes(topic);
   // Words left in "Add your own" go as an item: nothing typed is dropped.
@@ -132,15 +135,15 @@ export function Questions({
     errorRef.current?.scrollIntoView?.({ block: 'center' });
     errorRef.current?.focus({ preventScroll: true });
   };
-  // With nothing answered, every topic goes as a placeholder. Any answer goes
-  // as Draft my signup sends it, checks and all, rather than being dropped.
-  const draftWithPlaceholders = () => {
-    if (hasAnswers(questions, answers)) draft();
-    else onSend(buildFollowUp(questions, answers, { placeholders: true }));
-  };
 
   const parts = [
-    <What key="what" options={questions.whatOptions} answers={answers} update={update} />,
+    <What
+      key="what"
+      asked={asks('what')}
+      options={questions.whatOptions}
+      answers={answers}
+      update={update}
+    />,
     asks('when') && <When key="when" answers={answers} update={update} />,
     asks('how_many') && <HowMany key="how_many" answers={answers} update={update} />,
   ].filter(Boolean);
@@ -191,15 +194,8 @@ export function Questions({
       </aside>
 
       <section className="overflow-hidden rounded-2xl border border-surface-sunk bg-white">
-        <div className="flex items-center justify-between border-b border-surface-sunk bg-surface-raised px-4 py-3 text-xs font-medium text-ink-muted">
-          <span className="flex animate-fade-in items-center gap-2">
-            <span className="inline-block h-1.5 w-1.5 rounded-full bg-brand" />
-            Your answers
-          </span>
-        </div>
-
-        <div className="flex flex-col gap-4 p-4 pb-2 sm:p-6 sm:pb-2">
-          <YouWrote prompt={prompt} variant="box" />
+        <div className="flex flex-col gap-4 p-4 sm:px-6 sm:py-5">
+          <YouWrote prompt={prompt} variant="plain" />
           {!edited && error && (
             <div ref={errorRef} tabIndex={-1} className="outline-none">
               {error}
@@ -220,28 +216,20 @@ export function Questions({
           style={{ animationDelay: `${80 + parts.length * 70}ms` }}
         >
           <Link
-            href="/app/signups/new?manual=1"
-            className="inline-flex min-h-11 items-center self-center text-sm text-ink-muted underline hover:text-ink sm:self-auto"
+            href={handFillHref(prompt)}
+            className="inline-flex min-h-11 items-center self-center text-[15px] text-ink-muted underline hover:text-ink sm:self-auto"
           >
             Fill in by hand instead
           </Link>
-          <div className="flex flex-col-reverse gap-2 sm:flex-row sm:flex-wrap">
-            <button
-              type="button"
-              onClick={draftWithPlaceholders}
-              className="inline-flex min-h-11 items-center justify-center rounded-xl border border-surface-sunk bg-white px-4 text-[15px] font-medium text-ink hover:bg-surface-raised sm:text-sm"
-            >
-              Draft with placeholders
-            </button>
-            <button
-              type="button"
-              onClick={draft}
-              className="inline-flex min-h-12 items-center justify-center gap-2 rounded-xl bg-brand px-5 text-[15px] font-semibold text-white shadow-sm transition hover:brightness-110 sm:min-h-11 sm:text-sm"
-            >
-              <Sparkles className="h-3.5 w-3.5" aria-hidden="true" />
-              Draft my signup
-            </button>
-          </div>
+          {/* Anything skipped goes as a placeholder, as the heading's line says. */}
+          <button
+            type="button"
+            onClick={draft}
+            className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-brand px-5 text-[15px] font-semibold text-white shadow-sm transition hover:bg-brand-hover"
+          >
+            <Sparkles className="h-3.5 w-3.5" aria-hidden="true" />
+            Draft my signup
+          </button>
         </div>
       </section>
     </div>
@@ -253,8 +241,20 @@ interface Part {
   update: (change: (answers: Answers) => Answers) => void;
 }
 
-function What({ options, answers, update }: Part & { options: string[] }) {
+function What({
+  asked,
+  options,
+  answers,
+  update,
+}: Part & {
+  /** False when the description already says what: `options` are its things, picked to start. */
+  asked: boolean;
+  options: string[];
+}) {
   const id = useId();
+  // Asked, the model's options are pills to pick and only the organizer's own
+  // items are chips. Not asked, everything on the list is a chip to remove.
+  const chips = asked ? answers.added : answeredItems(answers);
   const full = isFull(answers);
   // Add and a chip's × go away once used, so each hands focus on rather than
   // dropping it to the page.
@@ -268,12 +268,12 @@ function What({ options, answers, update }: Part & { options: string[] }) {
   };
   // To the next chip's ×, or to the box when it was the last chip.
   const remove = (item: string) => {
-    const next = answers.added[answers.added.indexOf(item) + 1];
-    flushSync(() => update((a) => removeAdded(a, item)));
+    const next = chips[chips.indexOf(item) + 1];
+    flushSync(() => update((a) => removeItem(a, item)));
     const nextChip = next === undefined ? undefined : removeRefs.current.get(next);
     (nextChip ?? inputRef.current)?.focus();
   };
-  const placeholder = answers.added.length > 0 ? 'Add another' : 'Add your own';
+  const placeholder = chips.length > 0 ? 'Add another' : 'Add your own';
   // Size the box to what it shows, so the pill ends where the words do.
   const chars = Math.min(40, Math.max(answers.pending.length, placeholder.length));
 
@@ -281,41 +281,46 @@ function What({ options, answers, update }: Part & { options: string[] }) {
     <section className="flex flex-col gap-2.5 p-4 sm:gap-3 sm:px-6 sm:py-5">
       <div>
         <p id={id} className={QUESTION}>
-          What do people sign up for?
+          {asked ? 'What do people sign up for?' : 'What people sign up for'}
         </p>
-        <p className={`${HINT} mt-0.5`}>Pick any that apply, or add your own.</p>
+        <p className={`${HINT} mt-0.5`}>
+          {asked
+            ? 'Pick any that apply, or add your own.'
+            : "From your description. Remove any that don't fit, or add your own."}
+        </p>
       </div>
       <div
         role="group"
         aria-labelledby={id}
-        className="-my-[5px] flex flex-wrap items-center gap-x-1.5"
+        className="-my-1 flex flex-wrap items-center gap-x-1.5"
       >
-        {options.map((option) => {
-          const on = answers.picked.includes(option);
-          return (
-            <button
-              key={option}
-              type="button"
-              aria-pressed={on}
-              disabled={!on && full}
-              onClick={() => update((a) => togglePick(a, option, options))}
-              className="group inline-flex min-h-11 items-center focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              <span
-                className={`${PILL} ${FOCUS_INSIDE} ${
-                  on
-                    ? PILL_ON
-                    : 'border-surface-sunk bg-white shadow-sm group-hover:bg-surface-raised'
-                }`}
+        {asked &&
+          options.map((option) => {
+            const on = answers.picked.includes(option);
+            return (
+              <button
+                key={option}
+                type="button"
+                aria-pressed={on}
+                disabled={!on && full}
+                onClick={() => update((a) => togglePick(a, option, options))}
+                className="group inline-flex min-h-11 items-center focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50"
               >
-                {on && <Tick />}
-                {option}
-              </span>
-            </button>
-          );
-        })}
-        {answers.added.map((item) => (
-          <span key={item} className={`${PILL} ${PILL_ON} my-[5px] pr-0`}>
+                <span
+                  className={`${PILL} ${FOCUS_INSIDE} ${
+                    on
+                      ? PILL_ON
+                      : 'border-surface-sunk bg-white shadow-sm group-hover:bg-surface-raised'
+                  }`}
+                >
+                  {on && <Tick />}
+                  {option}
+                </span>
+              </button>
+            );
+          })}
+        {chips.map((item) => (
+          <span key={item} className={`${PILL} ${PILL_ON} my-1 pr-0`}>
             <Tick />
             {item}
             <button
@@ -326,7 +331,7 @@ function What({ options, answers, update }: Part & { options: string[] }) {
               type="button"
               aria-label={`Remove ${item}`}
               onClick={() => remove(item)}
-              className="-my-[5px] inline-flex h-11 w-8 items-center justify-center rounded-full focus-visible:outline-offset-[-6px]"
+              className="-my-1 inline-flex h-11 w-8 items-center justify-center rounded-full focus-visible:outline-offset-[-6px]"
             >
               <X className="h-[13px] w-[13px]" strokeWidth={2.5} aria-hidden="true" />
             </button>
@@ -342,14 +347,14 @@ function What({ options, answers, update }: Part & { options: string[] }) {
           </span>
         ) : (
           <span
-            className={`my-[5px] inline-flex h-[34px] items-center rounded-full border bg-white pl-3 focus-within:border-solid focus-within:border-brand ${
+            className={`my-1 inline-flex h-9 items-center rounded-full border bg-white pl-3 focus-within:border-solid focus-within:border-brand ${
               answers.pending.trim()
                 ? 'border-brand pr-1.5'
                 : 'border-dashed border-ink-soft/50 pr-3'
             }`}
           >
             {/* The Add button sits outside the label, so it isn't part of the box's name. */}
-            <label className="-my-[5px] inline-flex h-11 cursor-text items-center gap-1.5">
+            <label className="-my-1 inline-flex h-11 cursor-text items-center gap-1.5">
               <Plus
                 className="h-[13px] w-[13px] flex-shrink-0 text-ink-muted"
                 strokeWidth={2.5}
@@ -372,14 +377,14 @@ function What({ options, answers, update }: Part & { options: string[] }) {
                   add();
                 }}
                 style={{ width: `${(chars * 0.55 + 0.5).toFixed(2)}em` }}
-                className="min-w-0 max-w-[260px] border-0 bg-transparent p-0 text-base outline-none placeholder:text-ink-soft sm:text-sm"
+                className="min-w-0 max-w-[260px] border-0 bg-transparent p-0 text-base outline-none placeholder:text-ink-soft sm:text-[15px]"
               />
             </label>
             {answers.pending.trim() && (
               <button
                 type="button"
                 onClick={add}
-                className="group -my-[5px] ml-1.5 inline-flex h-11 items-center focus-visible:outline-none"
+                className="group -my-1 ml-1.5 inline-flex h-11 items-center focus-visible:outline-none"
               >
                 <span
                   className={`inline-flex h-[26px] items-center rounded-full bg-brand px-2.5 text-xs font-semibold text-white ${FOCUS_INSIDE}`}
@@ -425,7 +430,7 @@ function When({ answers, update }: Part) {
               onChange={() => set({ when: choice.kind })}
               className="peer sr-only"
             />
-            <span className="inline-flex min-h-9 flex-1 items-center justify-center rounded-[9px] px-2 py-1 text-center text-sm font-medium leading-tight text-ink-muted peer-checked:bg-white peer-checked:font-semibold peer-checked:text-ink peer-checked:shadow peer-focus-visible:outline peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-brand sm:px-3.5">
+            <span className="inline-flex min-h-9 flex-1 items-center justify-center rounded-[9px] px-2 py-1 text-center text-[15px] font-medium leading-tight text-ink-muted peer-checked:bg-white peer-checked:font-semibold peer-checked:text-ink peer-checked:shadow peer-focus-visible:outline peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-brand sm:px-3.5">
               {choice.label}
             </span>
           </label>
@@ -475,7 +480,6 @@ function When({ answers, update }: Part) {
               className={`${BOX} ${BOX_FOCUS} min-w-0 flex-1 px-3 sm:flex-none`}
             />
           </div>
-          <span className="text-[13px] text-ink-soft">Times are optional.</span>
         </div>
       )}
       {answers.when === 'several' && (
@@ -513,7 +517,7 @@ function HowMany({ answers, update }: Part) {
         <p className={`${HINT} mt-0.5`}>For each thing above. Leave a box empty for no limit.</p>
       </div>
       {items.length === 0 ? (
-        <p className="mb-1.5 mt-1 rounded-[10px] border border-dashed border-surface-sunk px-3.5 py-3 text-sm text-ink-muted">
+        <p className="mb-1.5 mt-1 rounded-[10px] border border-dashed border-surface-sunk px-3.5 py-3 text-[13px] text-ink-muted">
           Pick or add something above first.
         </p>
       ) : (
@@ -527,7 +531,7 @@ function HowMany({ answers, update }: Part) {
               >
                 <span className="min-w-0 text-[15px]">{item}</span>
                 {/* 46px with its border, so −, + and the number are each 44px targets. */}
-                <span className="inline-flex h-[46px] flex-shrink-0 items-center overflow-hidden rounded-[12px] border border-surface-sunk bg-white shadow-sm focus-within:border-brand">
+                <span className="inline-flex h-[46px] flex-shrink-0 items-center overflow-hidden rounded-[10px] border border-surface-sunk bg-white shadow-sm focus-within:border-brand">
                   <button
                     type="button"
                     aria-label={`Fewer people for ${item}`}
@@ -549,7 +553,7 @@ function HowMany({ answers, update }: Part) {
                     // Show what will be sent: the number, or empty for no limit. A
                     // fraction stays as typed, for Draft my signup to stop.
                     onBlur={() => setCount(item, String(parseCount(count) ?? ''))}
-                    className="h-11 w-[72px] border-x border-surface-sunk bg-transparent px-0.5 text-center text-[15px] tabular-nums outline-none [appearance:textfield] placeholder:text-ink-soft sm:w-[76px] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+                    className="h-11 w-[72px] border-x border-surface-sunk bg-transparent px-0.5 text-center text-base tabular-nums outline-none [appearance:textfield] placeholder:text-ink-soft sm:w-[76px] sm:text-[15px] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
                   />
                   <button
                     type="button"
